@@ -1,0 +1,28 @@
+# Your settings
+server/config.php
+dashboard/config.php
+
+# Everything the recorder creates at runtime
+server/recordings/
+server/secret/
+server/bin/
+server/channels.json
+server/channels.json.*
+server/*.log
+server/cron_output.txt
+server/last_run.txt
+server/STOP-CONVERSIONS.txt
+
+# PC tools: sign-ins, Google client secret, exported accounts, state
+pc-tools/client_secret.json
+pc-tools/accounts/
+pc-tools/youtube_setup_*.json
+pc-tools/config.json
+pc-tools/uploads.json
+pc-tools/__pycache__/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

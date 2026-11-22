@@ -1,0 +1,31 @@
+name: check
+
+on: [push, pull_request]
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.0'
+      - name: PHP syntax (8.0, the minimum)
+        run: for f in server/*.php dashboard/*.php; do php -l "$f"; done
+      - name: JavaScript syntax
+        run: |
+          for f in dashboard/player.html dashboard/index.php; do
+            python3 - "$f" <<'PY'
+          import sys
+          src = open(sys.argv[1], encoding='utf-8').read()
+          a = src.rindex('<script>') + len('<script>'); b = src.rindex('</script>')
+          open('/tmp/check.js', 'w').write(src[a:b])  # the page script (the last one)
+          PY
+            node --check /tmp/check.js
+          done
+      - name: Players are identical
+        run: cmp dashboard/player.html pc-tools/player.html
+      - name: Python syntax
+        run: python3 -m py_compile pc-tools/yt_uploader.py
+      - name: Shell syntax
+        run: bash -n start-local.sh
