@@ -1,6 +1,10 @@
-# Stream Recorder™
+<p align="center">
+  <img src="docs/images/icon.png" alt="Stream Recorder icon" width="112">
+</p>
 
-**Automatically record Twitch streams — video and chat — on a cheap shared web host or your own computer, and manage everything from one web dashboard.**
+<h1 align="center">Stream Recorder™</h1>
+
+<p align="center"><b>Automatically record Twitch streams — video and chat — on a cheap shared web host or your own computer, and manage everything from one web dashboard.</b></p>
 
 Plain PHP, no database, no framework, no build step. Upload two folders and add one cron line, or run one script locally.
 
