@@ -2,9 +2,15 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.3.0] - 2026-11-24
 
 ### Added
+- **PC scan: subtitles, translation and spoken-word moments.** Speech recognition (Whisper) and translation run in Chrome/Edge on your own PC, on its graphics card; the server only prepares the sound ([docs/pc-scan.md](docs/pc-scan.md)).
+  - **Asked after each stream:** with the streamer setting *PC scan after each stream: Ask me*, the dashboard asks *Scan on your PC?* when a stream ends. *Skip* uploads as before. Any recording can also be scanned later with its *Scan* button.
+  - **Light on the host:** the server cuts only the sound track into 10-minute pieces (about 2 MB each), at twice `CONVERT_SPEED`, while nothing records.
+  - **Resumable:** the scan page saves after every piece and continues where it stopped.
+  - **Player:** subtitles menu (spoken language or translated) and a *Translated* switch for the chat. *Download to this PC, then play* includes these files.
+  - **YouTube:** new moments rule *Streamer says*. A waiting upload holds until the scan is done or skipped (at most `SCAN_WAIT_HOURS`, default 24, without progress), so its title and description can include spoken-word moments.
 - **Manual YouTube upload.** A *YouTube* button next to each finished recording uploads it to a chosen account, for streams recorded while the automatic upload was off. Same queue, title, description and moments as the automatic upload; waits for the MP4 conversion when one is pending. *Cancel upload* takes a queued upload out again; *Upload again* for recordings already on YouTube.
 
 ### Changed
@@ -75,7 +81,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
-[Unreleased]: https://github.com/LandonGam3r/stream-recorder/compare/v1.2.0...HEAD
+[1.3.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/LandonGam3r/stream-recorder/releases/tag/v1.0.0

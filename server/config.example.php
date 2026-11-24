@@ -83,6 +83,13 @@ define('YOUTUBE_CATEGORY', '20');
 define('UPLOAD_BUDGET', 45);
 define('UPLOAD_CHUNK_MB', 16);
 
+// ---------------------------------------------------------------- PC scan
+
+// When a streamer's "PC scan" setting is "ask", its YouTube upload waits for your Scan/Skip choice
+// and for the scan itself. After this many hours without an answer or progress it uploads anyway.
+// The sound for the scan is cut at 2 x CONVERT_SPEED (only reading counts towards the IO limit).
+define('SCAN_WAIT_HOURS', 24);
+
 // ---------------------------------------------------------------- logging
 
 // true = log every run, including routine "offline" checks and handovers (useful while setting up).

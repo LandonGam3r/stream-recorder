@@ -197,7 +197,7 @@ function login_page(string $error = '', int $code = 200): void
 }
 
 if (!$authed) {
-    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload']));
+    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi']));
     if (isset($_GET['api']) || isset($_GET['io'])) { // the open dashboard noticed it's logged out: reload shows the login form
         http_response_code(401);
         header('Content-Type: application/json');
@@ -332,6 +332,7 @@ function collect(): array
                 'convert' => $convert,
                 'playable' => is_file("$d/video.mp4"),
                 'busy' => recording_busy($d, $st, $convertQ),
+                'scan' => scan_info($d),
             ];
         }
         $channels[] = [
@@ -363,6 +364,7 @@ function collect(): array
             'enabled' => !empty($list[$name]['enabled']),
             'youtube' => (string)($list[$name]['youtube'] ?? ''),
             'twitch_auth' => (string)($list[$name]['twitch_auth'] ?? 'auto'),
+            'pc_scan' => (string)($list[$name]['pc_scan'] ?? 'off'),
             'not_found' => !empty($st['not_found']),
             'wrapping_up' => !empty($st['stream_id']) && empty($list[$name]['enabled']),
         ];
@@ -453,6 +455,50 @@ function recording_dir($chan, $folder): ?string
     return $d;
 }
 
+if (!function_exists('mb_substr')) { function mb_substr($s, $start, $len = null) { return substr($s, $start, $len); } }
+
+/** Content type of a file the player/scan page may fetch from a recording folder, or null. */
+function file_type(string $name): ?string
+{
+    $fixed = ['video.mp4' => 'video/mp4', 'chat.txt' => 'text/plain; charset=utf-8', 'meta.json' => 'application/json',
+              'transcript.json' => 'application/json'];
+    if (isset($fixed[$name])) return $fixed[$name];
+    if (preg_match('/^subtitles(\.[a-z]{2,3}(-[A-Za-z]{2,4})?)?\.vtt$/', $name)) return 'text/vtt; charset=utf-8';
+    if (preg_match('/^chat_translation\.[a-z]{2,3}(-[A-Za-z]{2,4})?\.json$/', $name)) return 'application/json';
+    if (preg_match('/^audio\/part\d{3}\.(ogg|m4a)$/', $name, $m)) return $m[1] === 'ogg' ? 'audio/ogg' : 'audio/mp4';
+    return null;
+}
+
+/** Subtitle and chat-translation files of a recording: [['name' => ..., 'lang' => ..., 'kind' => 'subs'|'chat'], ...] */
+function scan_outputs(string $d): array
+{
+    $out = [];
+    $orig = (string)(read_json("$d/scan.json")['language'] ?? '');
+    if (is_file("$d/subtitles.vtt")) $out[] = ['name' => 'subtitles.vtt', 'lang' => $orig, 'kind' => 'subs', 'original' => true];
+    foreach (glob("$d/subtitles.*.vtt") ?: [] as $f) {
+        if (preg_match('/^subtitles\.([a-z]{2,3}(?:-[A-Za-z]{2,4})?)\.vtt$/', basename($f), $m)) $out[] = ['name' => basename($f), 'lang' => $m[1], 'kind' => 'subs'];
+    }
+    foreach (glob("$d/chat_translation.*.json") ?: [] as $f) {
+        if (preg_match('/^chat_translation\.([a-z]{2,3}(?:-[A-Za-z]{2,4})?)\.json$/', basename($f), $m)) $out[] = ['name' => basename($f), 'lang' => $m[1], 'kind' => 'chat'];
+    }
+    return $out;
+}
+
+/** PC-scan state of a recording for the dashboard, or null when it was never asked/started. */
+function scan_info(string $d): ?array
+{
+    if (!is_file("$d/scan.json")) return null;
+    $s = read_json("$d/scan.json");
+    $tr = is_file("$d/transcript.json") ? read_json("$d/transcript.json") : [];
+    return [
+        'state' => (string)($s['state'] ?? ''), 'note' => $s['note'] ?? null, 'error' => $s['error'] ?? null,
+        'pieces' => (int)($s['pieces'] ?? 0), 'done' => count($tr['parts'] ?? []),
+        'language' => $s['language'] ?? null, 'target' => $s['target'] ?? null,
+        'segments' => (int)($s['segments'] ?? 0), 'updated' => (int)($s['updated'] ?? 0),
+        'outputs' => scan_outputs($d),
+    ];
+}
+
 /** Same locked read-modify-write as record.php's queue_update(). */
 function dash_queue_update(string $name, callable $fn): void
 {
@@ -487,9 +533,9 @@ $csrf = hash_hmac('sha256', 'recorder-dashboard-actions', $keyHash);
 // One long PHP request per viewing would risk being stopped by the host (like long cron runs).
 if (isset($_GET['file'])) {
     $name = $_GET['name'] ?? '';
-    $types = ['video.mp4' => 'video/mp4', 'chat.txt' => 'text/plain; charset=utf-8', 'meta.json' => 'application/json'];
     $d = recording_dir($_GET['ch'] ?? null, $_GET['file']);
-    if (!$d || !is_string($name) || !isset($types[$name]) || !is_file("$d/$name")) not_found();
+    $type = is_string($name) ? file_type($name) : null;
+    if (!$d || !$type || !is_file("$d/$name")) not_found();
     $path = "$d/$name";
     @set_time_limit(isset($_SERVER['HTTP_RANGE']) ? 120 : 0);
     while (ob_get_level()) ob_end_clean();
@@ -510,11 +556,11 @@ if (isset($_GET['file'])) {
     if ($name === 'video.mp4' && $partial && !isset($_GET['dl'])) { // players always ask with a Range; a plain download gets it all
         $end = min($end, $start + 8 * 1048576 - 1);
     }
-    header('Content-Type: ' . $types[$name]);
+    header('Content-Type: ' . $type);
     header('Accept-Ranges: bytes');
     header('Last-Modified: ' . gmdate('D, d M Y H:i:s', filemtime($path)) . ' GMT');
     if (isset($_GET['dl'])) {
-        $fn = preg_replace('/[^A-Za-z0-9_.-]/', '_', basename(dirname($d)) . '_' . basename($d) . '_' . $name);
+        $fn = preg_replace('/[^A-Za-z0-9_.-]/', '_', basename(dirname($d)) . '_' . basename($d) . '_' . basename($name));
         header('Content-Disposition: attachment; filename="' . $fn . '"');
     }
     header('Cache-Control: private, max-age=3600');
@@ -559,6 +605,8 @@ if (isset($_GET['play'])) {
         'title' => (string)(read_json("$d/meta.json")['title'] ?? ''),
         'me'    => (string)(read_json(REC_DIR . '/secret/token_status.json')['login'] ?? ''), // your Twitch name, highlighted in chat
         'dl_limit_mb' => DOWNLOAD_LIMIT_MB === 'auto' ? round(0.8 * (float)IO_LIMIT_MB, 1) : (float)DOWNLOAD_LIMIT_MB,
+        // From the PC scan: subtitles (original + translations) and translated chat.
+        'extras' => array_map(function ($o) use ($base) { return $o + ['url' => $base . rawurlencode($o['name'])]; }, scan_outputs($d)),
     ];
     $inject = '<script>window.PLAYER_SOURCE = ' . json_encode($src, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES) . ';</script>';
     $pos = strpos($player, '<script>');
@@ -567,6 +615,172 @@ if (isset($_GET['play'])) {
     $pos = strpos($player, '<script>');
     echo $pos === false ? $player : substr($player, 0, $pos) . $inject . substr($player, $pos);
     exit;
+}
+
+// ---------------------------------------------------------------- PC scan page
+// Runs on your PC, in the browser: downloads the sound pieces, recognises speech, translates, and sends
+// the text back via ?scanapi. Models come from Hugging Face (cached by the browser after the first time).
+if (isset($_GET['scan'])) {
+    $d = recording_dir($_GET['ch'] ?? null, $_GET['scan']);
+    if (!$d) not_found();
+    $page = @file_get_contents(__DIR__ . '/scan.html');
+    if ($page === false) {
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'scan.html is missing: upload it next to this index.php.';
+        exit;
+    }
+    $meta = read_json("$d/meta.json");
+    $self = strtok($_SERVER['REQUEST_URI'], '?');
+    $src = [
+        'channel' => (string)$_GET['ch'], 'folder' => basename($d),
+        'title' => (string)($meta['title'] ?? ''), 'started' => (string)($meta['stream_started'] ?? ''),
+        'seconds' => (float)($meta['recorded_seconds'] ?? 0),
+        'api' => $self . '?scanapi=1',
+        'files' => $self . '?ch=' . rawurlencode($_GET['ch']) . '&file=' . rawurlencode(basename($d)) . '&name=',
+        'player' => is_file("$d/video.mp4") ? $self . '?ch=' . rawurlencode($_GET['ch']) . '&play=' . rawurlencode(basename($d)) : null,
+        'token' => $csrf,
+        'has_chat' => is_file("$d/chat.txt"),
+    ];
+    // This page loads the speech library from jsDelivr and the models from Hugging Face; nothing is sent there.
+    header("Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
+        . "style-src 'unsafe-inline'; connect-src 'self' https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co; "
+        . "media-src 'self' blob: data:; img-src data:; worker-src 'self' blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    header('Content-Type: text/html; charset=utf-8');
+    $inject = '<script>window.SCAN_SOURCE = ' . json_encode($src, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . ';</script>';
+    $page = preg_replace('#</head>#', '<link rel="icon" type="image/png" href="' . FAVICON . '">' . "\n</head>", $page, 1);
+    $pos = strpos($page, '<script');
+    echo $pos === false ? $page : substr($page, 0, $pos) . $inject . substr($page, $pos);
+    exit;
+}
+
+// ---------------------------------------------------------------- PC scan actions
+if (isset($_GET['scanapi'])) {
+    $in = check_action_request();
+    if (!is_file(REC_DIR . '/scan.php')) action_fail(409, 'scan.php is missing in the recorder folder: upload it next to record.php.');
+    require_once REC_DIR . '/scan.php';
+    $op = (string)($in['op'] ?? '');
+    $d = recording_dir($in['channel'] ?? null, $in['folder'] ?? null);
+    if (!$d) action_fail(404, 'That recording no longer exists.');
+    $chanDir = dirname($d);
+    $logLine = function (string $msg) use ($chanDir) {
+        @file_put_contents("$chanDir/recorder.log", '[' . date('Y-m-d H:i:s') . "] $msg\n", FILE_APPEND | LOCK_EX);
+    };
+    $lang = function ($v) { $v = (string)$v; return preg_match('/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/', $v) ? $v : ''; };
+    $state = (string)(scan_load($d)['state'] ?? '');
+    $active = in_array($state, ['requested', 'preparing', 'ready', 'scanning'], true);
+
+    if ($op === 'status') {
+        $s = scan_load($d);
+        $tr = is_file("$d/transcript.json") ? read_json("$d/transcript.json") : [];
+        echo json_encode(['ok' => true, 'scan' => $s, 'pieces' => scan_audio_parts($d),
+            'transcript' => ['parts' => $tr['parts'] ?? (object)[], 'language' => $tr['language'] ?? null,
+                'target' => $tr['target'] ?? null, 'model' => $tr['model'] ?? null],
+            'outputs' => scan_outputs($d)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+    if ($op === 'request') {
+        $st = read_json("$chanDir/state.json");
+        if (!empty($st['stream_id']) && ($st['dir'] ?? '') === basename($d)) action_fail(409, 'This stream is still being recorded.');
+        if (!is_file("$d/video.mp4") && !is_file("$d/video.ts") && !glob("$d/parts/*.ts")) action_fail(409, 'This recording has no video.');
+        if (!$active) {
+            $ready = scan_audio_parts($d) && trim((string)@file_get_contents("$d/audio/.exit")) === '0';
+            scan_update($d, function (array &$s) use ($ready) {
+                $keep = array_intersect_key($s, array_flip(['asked']));
+                $s = $keep + ['state' => $ready ? 'ready' : 'requested', 'requested' => time(), 'updated' => time()];
+            });
+            $logLine('PC scan requested via the dashboard: ' . basename($d) . ($ready ? ' (sound already prepared)' : ' (the server prepares the sound next run)'));
+        }
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'skip' || $op === 'cancel') {
+        if ($op === 'skip' && $state !== 'ask') action_fail(409, 'Nothing to skip.');
+        if ($op === 'cancel' && !$active) action_fail(409, 'No scan is running.');
+        scan_update($d, function (array &$s) use ($op) { $s['state'] = $op === 'skip' ? 'skipped' : 'cancelled'; $s['updated'] = time(); });
+        $logLine('PC scan ' . ($op === 'skip' ? 'skipped' : 'cancelled') . ' via the dashboard: ' . basename($d) . ' - a YouTube upload goes ahead without it');
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'fail') {
+        if ($active) {
+            $why = mb_substr(trim((string)($in['error'] ?? 'unknown problem')), 0, 300);
+            scan_update($d, function (array &$s) use ($why) { $s['state'] = 'failed'; $s['error'] = $why; $s['updated'] = time(); });
+            $logLine('PC scan failed on the PC for ' . basename($d) . ": $why");
+        }
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'save') {
+        // One sound piece done: its subtitle lines [[start, end, text, translation?], ...] (times in the video).
+        if (!in_array($state, ['ready', 'scanning', 'done'], true)) action_fail(409, 'This scan was cancelled or not started.');
+        $part = (int)($in['part'] ?? -1);
+        $segs = $in['segments'] ?? null;
+        if ($part < 0 || $part > 999 || !is_array($segs) || count($segs) > 5000) action_fail(400, 'Bad data.');
+        $clean = [];
+        foreach ($segs as $g) {
+            if (!is_array($g) || !is_numeric($g[0] ?? null) || !is_numeric($g[1] ?? null)) continue;
+            $t = mb_substr(trim((string)($g[2] ?? '')), 0, 500);
+            if ($t === '') continue;
+            $row = [round((float)$g[0], 2), round((float)$g[1], 2), $t];
+            if (isset($g[3]) && trim((string)$g[3]) !== '') $row[] = mb_substr(trim((string)$g[3]), 0, 700);
+            $clean[] = $row;
+        }
+        $f = "$d/transcript.json";
+        $h = fopen($f, 'c+');
+        flock($h, LOCK_EX);
+        $tr = json_decode((string)stream_get_contents($h), true) ?: [];
+        $tr['parts'] = $tr['parts'] ?? [];
+        $tr['parts'][(string)$part] = $clean;
+        foreach (['language', 'target', 'model'] as $k) if (isset($in[$k])) $tr[$k] = $k === 'model' ? preg_replace('/[^A-Za-z0-9_.\/-]/', '', (string)$in[$k]) : $lang($in[$k]);
+        ksort($tr['parts'], SORT_NUMERIC);
+        $tr['segments'] = array_merge(...array_values($tr['parts']) ?: [[]]);
+        $tr['updated'] = time();
+        ftruncate($h, 0); rewind($h);
+        fwrite($h, json_encode($tr, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        flock($h, LOCK_UN); fclose($h);
+        if ($state !== 'done') scan_update($d, function (array &$s) { $s['state'] = 'scanning'; $s['updated'] = time(); });
+        echo json_encode(['ok' => true, 'parts' => count($tr['parts'])]);
+        exit;
+    }
+    if ($op === 'chat') {
+        // Translated chat: {original message text: translation}, for the player's "Translated" switch.
+        $target = $lang($in['target'] ?? '');
+        $map = $in['map'] ?? null;
+        if ($target === '' || !is_array($map) || count($map) > 200000) action_fail(400, 'Bad data.');
+        $clean = [];
+        foreach ($map as $k => $v) {
+            if (!is_string($k) || !is_string($v) || $v === '' || $v === $k) continue;
+            $clean[mb_substr($k, 0, 600)] = mb_substr($v, 0, 900);
+        }
+        $json = json_encode(['target' => $target, 'map' => (object)$clean], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (strlen($json) > 20 * 1048576) action_fail(413, 'Translated chat is too large.');
+        file_put_contents("$d/chat_translation.$target.json", $json, LOCK_EX);
+        echo json_encode(['ok' => true, 'count' => count($clean)]);
+        exit;
+    }
+    if ($op === 'finish') {
+        if (!in_array($state, ['ready', 'scanning', 'done'], true)) action_fail(409, 'This scan was cancelled or not started.');
+        $tr = read_json("$d/transcript.json");
+        $segs = $tr['segments'] ?? [];
+        file_put_contents("$d/subtitles.vtt", scan_vtt($segs, 2));
+        $target = (string)($tr['target'] ?? '');
+        $translated = 0;
+        foreach ($segs as $g) if (isset($g[3])) $translated++;
+        if ($target !== '' && $translated) file_put_contents("$d/subtitles.$target.vtt", scan_vtt($segs, 3));
+        scan_update($d, function (array &$s) use ($tr, $segs, $translated) {
+            $s['state'] = 'done'; $s['updated'] = time(); $s['finished'] = time(); $s['moments_pending'] = true;
+            $s['segments'] = count($segs); $s['language'] = $tr['language'] ?? null; $s['target'] = $translated ? ($tr['target'] ?? null) : null;
+            unset($s['error'], $s['note']);
+        });
+        // The sound pieces were only needed for the scan.
+        foreach (glob("$d/audio/{*,.*}", GLOB_BRACE) ?: [] as $f) if (is_file($f)) @unlink($f);
+        @rmdir("$d/audio");
+        $logLine(sprintf('PC scan finished for %s: %d subtitle lines%s', basename($d), count($segs),
+            $translated ? ", translated to $target" : '') . ' - moments are updated at the next cron run');
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    action_fail(400, 'Unknown action.');
 }
 
 // ---------------------------------------------------------------- full log of a streamer (or the system log)
@@ -663,6 +877,10 @@ if (isset($_GET['streamers'])) {
                     if (!in_array($in['twitch_auth'], ['auto', 'on', 'off'], true)) { $err = 'Unknown setting.'; return; }
                     $c['twitch_auth'] = $in['twitch_auth'];
                 }
+                if (array_key_exists('pc_scan', $in)) {
+                    if (!in_array($in['pc_scan'], ['ask', 'off'], true)) { $err = 'Unknown setting.'; return; }
+                    $c['pc_scan'] = $in['pc_scan'];
+                }
                 $c['changed'] = time();
                 $list[$ch] = $c;
             } elseif ($op === 'remove') {
@@ -682,7 +900,9 @@ if (isset($_GET['streamers'])) {
     if ($op === 'remove' && is_dir($cd) && !glob("$cd/*", GLOB_ONLYDIR)) { rrmdir($cd); echo json_encode(['ok' => true]); exit; }
     $what = ['add' => !empty($in['enabled']) ? 'added and switched on' : 'added (switched off)', 'remove' => 'removed from the list',
         'set' => isset($in['enabled']) ? ($in['enabled'] ? 'recording switched ON' : 'recording switched OFF')
-            : (isset($in['youtube']) ? 'YouTube upload set to ' . ($in['youtube'] ?: 'none') : 'Twitch login set to ' . ($in['twitch_auth'] ?? ''))][$op];
+            : (isset($in['youtube']) ? 'YouTube upload set to ' . ($in['youtube'] ?: 'none')
+            : (isset($in['pc_scan']) ? 'PC scan after each stream: ' . ($in['pc_scan'] === 'ask' ? 'ask' : 'off')
+            : 'Twitch login set to ' . ($in['twitch_auth'] ?? '')))][$op];
     if (is_dir(REC_DIR . "/recordings/$ch")) {
         @file_put_contents(REC_DIR . "/recordings/$ch/recorder.log", '[' . date('Y-m-d H:i:s') . "] Dashboard: $what\n", FILE_APPEND | LOCK_EX);
     }
@@ -1024,6 +1244,10 @@ if (isset($_GET['api'])) {
   .p-recording { color: var(--live); background: rgba(255,77,90,.12); }
   .p-converting, .p-uploading { color: var(--accent); background: rgba(143,124,255,.14); }
   .p-upload-waiting { color: var(--warn); background: rgba(242,184,75,.13); }
+  .card.scanask { border-color: rgba(143,124,255,.45); }
+  .askrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line, rgba(255,255,255,.08)); }
+  .askrow .subj { font-weight: 600; }
+  .askrow .meta { color: var(--muted, #9aa0aa); font-size: 12px; margin-top: 2px; }
   .p-upload-queued { color: var(--accent); background: rgba(143,124,255,.08); }
   tr.confirm.yt td { background: rgba(143,124,255,.07); }
   tr.confirm select { margin: 0 6px; }
@@ -1071,6 +1295,7 @@ if (isset($_GET['api'])) {
   <div class="err" id="err"></div>
   <div class="strip" id="strip"></div>
   <div id="io"></div>
+  <div id="scanAsks"></div>
   <div id="alerts"></div>
   <div class="streamers-head">
     <h2>Streamers</h2>
@@ -1300,7 +1525,7 @@ if (isset($_GET['api'])) {
   window.addEventListener('resize', () => { clearTimeout(window.__ioR); window.__ioR = setTimeout(renderIo, 150); });
 
   // ---- YouTube moments
-  const MT = { text: 'Chat message contains', user: 'Message from user', burst: 'Chat burst', category: 'Category or title contains' };
+  const MT = { text: 'Chat message contains', user: 'Message from user', burst: 'Chat burst', category: 'Category or title contains', speech: 'Streamer says (PC scan)' };
   let mUI = null;
   function buildMoments() {
     const card = el('div', 'card moments');
@@ -1325,7 +1550,7 @@ if (isset($_GET['api'])) {
     const err = el('span', 'del-err');
     const upd = () => {
       burst.style.display = ty.value === 'burst' ? '' : 'none';
-      val.placeholder = { text: 'word or phrase, e.g. raid', user: 'username', burst: 'word (optional), e.g. LUL', category: 'e.g. Just Chatting' }[ty.value];
+      val.placeholder = { text: 'word or phrase, e.g. raid', user: 'username', burst: 'word (optional), e.g. LUL', category: 'e.g. Just Chatting', speech: 'word or phrase, e.g. let\'s go' }[ty.value];
     };
     ty.onchange = upd; upd();
     f.append(ch, ty, val, burst, el('span', 'marrow', '→'), lab, tl, add, err);
@@ -1431,6 +1656,75 @@ if (isset($_GET['api'])) {
     } catch (err) { $('#addErr').textContent = err.message; }
   });
 
+  // ---- PC scan
+  const SCAN_ACTIVE = ['requested', 'preparing', 'ready', 'scanning'];
+  const SCAN_TEXT = { ask: 'waiting for your choice', requested: 'starting - the server prepares the sound at the next cron run',
+    preparing: 'the server is preparing the sound', ready: 'sound ready - continue on the scan page', scanning: 'scanning on your PC',
+    done: 'done', skipped: 'skipped', cancelled: 'cancelled', failed: 'failed' };
+  let scanErr = {};
+  function langName(code) {
+    if (!code) return '';
+    try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) || code; } catch (e) { return code; }
+  }
+  function scanLine(c, r) {
+    const sc = r.scan, d = el('div', 'rec-sub');
+    let t = 'PC scan: ' + (SCAN_TEXT[sc.state] || sc.state);
+    if (sc.state === 'scanning' && sc.pieces) t += ' (' + sc.done + ' of ' + sc.pieces + ' pieces)';
+    if (sc.note && SCAN_ACTIVE.includes(sc.state)) t += ' · ' + sc.note;
+    if (sc.state === 'failed' && sc.error) t += ' · ' + sc.error;
+    d.textContent = t;
+    const subs = sc.outputs.filter(o => o.kind === 'subs').map(o => o.original ? 'spoken' + (o.lang ? ' (' + langName(o.lang) + ')' : '') : langName(o.lang));
+    const chat = sc.outputs.filter(o => o.kind === 'chat').map(o => langName(o.lang));
+    if (subs.length) d.append(' · subtitles: ' + subs.join(', '));
+    if (chat.length) d.append(' · chat in ' + chat.join(', '));
+    if (SCAN_ACTIVE.includes(sc.state)) {
+      const x = el('button', 'linkbtn', 'cancel'); x.title = 'Stop this scan; a waiting YouTube upload goes ahead without it';
+      x.onclick = () => scanAction('cancel', c.name, r.folder);
+      d.append(' · ', x);
+    }
+    const key = c.name + '/' + r.folder;
+    if (scanErr[key]) d.append(el('div', 'del-err', scanErr[key]));
+    return d;
+  }
+  async function scanAction(op, channel, folder) {
+    const key = channel + '/' + folder;
+    delete scanErr[key];
+    try { await post('?scanapi=1', { op, channel, folder }); } catch (e) { scanErr[key] = e.message; }
+    await load();
+  }
+  function openScan(channel, folder, request) {
+    // Open the tab first (a pop-up blocker allows it right after the click), then tell the server.
+    window.open('?ch=' + encodeURIComponent(channel) + '&scan=' + encodeURIComponent(folder), '_blank', 'noopener');
+    if (request) scanAction('request', channel, folder);
+  }
+  function renderScanAsks(data) {
+    const box = $('#scanAsks'); box.replaceChildren();
+    const asks = [];
+    data.channels.forEach(c => c.recordings.forEach(r => { if (r.scan && r.scan.state === 'ask') asks.push([c, r]); }));
+    if (!asks.length) return;
+    const card = el('div', 'card scanask');
+    const head = el('div', 'card-head');
+    head.append(el('h2', null, 'Scan on your PC?'), el('span', 'updated', 'subtitles, translation and spoken-word moments'));
+    card.append(head);
+    asks.forEach(([c, r]) => {
+      const row = el('div', 'askrow');
+      const mid = el('div');
+      mid.append(el('div', 'subj', c.name + ' – ' + (r.title || r.folder)));
+      mid.append(el('div', 'meta', (r.started ? r.started.slice(0, 16) : r.folder) + (r.seconds ? ' · ' + dur(r.seconds) : '')
+        + (c.youtube ? ' · the YouTube upload (' + c.youtube + ') waits for your choice' : '')));
+      const key = c.name + '/' + r.folder;
+      if (scanErr[key]) mid.append(el('div', 'del-err', scanErr[key]));
+      const btns = el('div', 'acts');
+      const go = el('button', 'act play', 'Scan on this PC'); go.onclick = () => openScan(c.name, r.folder, true);
+      const no = el('button', 'act', 'Skip'); no.title = 'No scan; a YouTube upload goes ahead with the chat-based moments';
+      no.onclick = () => scanAction('skip', c.name, r.folder);
+      btns.append(go, no);
+      row.append(mid, btns);
+      card.append(row);
+    });
+    box.append(card);
+  }
+
   async function ytAction(body, key) {
     ytBusy = true; ytError = null; ytCancelErr = null; pendingYt = body.op === 'queue' ? key : null; render(lastData);
     try {
@@ -1461,6 +1755,7 @@ if (isset($_GET['api'])) {
   function render(data) {
     lastData = data;
     renderMoments(data);
+    renderScanAsks(data);
     const now = data.now;
     const freshAlerts = renderAlerts(data.alerts, now);
     $('#updated').textContent = 'Updated ' + new Date(now * 1000).toLocaleTimeString() + ' · every 10 s';
@@ -1565,7 +1860,14 @@ if (isset($_GET['api'])) {
       ts.value = c.twitch_auth || 'auto';
       ts.onchange = () => streamerAction(c.name, { op: 'set', twitch_auth: ts.value });
       tl.append(ts);
-      set.append(yl, tl);
+      const pl = el('label', null, 'PC scan after each stream ');
+      const ps = el('select');
+      [['off', 'Off'], ['ask', 'Ask me']].forEach(([v, t]) => { const o = el('option', null, t); o.value = v; ps.append(o); });
+      ps.value = c.pc_scan || 'off';
+      ps.title = 'Subtitles, translation and spoken-word moments, made on your PC. With "Ask me" a YouTube upload waits for your choice.';
+      ps.onchange = () => streamerAction(c.name, { op: 'set', pc_scan: ps.value });
+      pl.append(ps);
+      set.append(yl, tl, pl);
       if (c.listed) {
         if (pendingRemove === c.name) {
           const w = el('span', 'rmconfirm', 'Remove ' + c.name + ' from the list?' + (c.recording_count ? ' Its recordings stay (delete them below).' : ''));
@@ -1612,8 +1914,10 @@ if (isset($_GET['api'])) {
         if (r.upload) {
           const pct = r.upload.size ? Math.floor(100 * r.upload.offset / r.upload.size) : 0;
           if (r.upload.started || r.upload.error) { const bar = el('div', 'bar'); const i = el('i'); i.style.width = pct + '%'; bar.append(i); a.append(bar); }
-          a.append(el('div', 'rec-sub', 'YouTube (' + r.upload.account + '): ' + (r.upload.started || r.upload.error ? pct + '%' : 'queued, starts at the next cron run when nothing is recording') + (r.upload.error ? ' · ' + r.upload.error : '')));
+          const scanWait = r.scan && (r.scan.state === 'ask' || SCAN_ACTIVE.includes(r.scan.state)) && !r.upload.started;
+          a.append(el('div', 'rec-sub', 'YouTube (' + r.upload.account + '): ' + (r.upload.started || r.upload.error ? pct + '%' : scanWait ? 'waits for the PC scan' : 'queued, starts at the next cron run when nothing is recording') + (r.upload.error ? ' · ' + r.upload.error : '')));
         }
+        if (r.scan) a.append(scanLine(c, r));
         if (r.youtube) { const l = el('a', null, 'YouTube (' + r.youtube.privacy + ')'); l.href = r.youtube.url; l.target = '_blank'; l.rel = 'noopener noreferrer'; const d = el('div', 'rec-sub'); d.append(l); a.append(d); }
         b.append(el('span', 'pill p-' + r.status.replace(' ', '-'), r.status)); b.append(el('div', 'rec-sub', mb(r.size)));
         const key = c.name + '/' + r.folder;
@@ -1637,6 +1941,16 @@ if (isset($_GET['api'])) {
           yb.title = r.youtube ? 'Already on YouTube - upload it once more' : 'Upload this recording to YouTube';
           yb.onclick = () => { pendingYt = key; ytError = null; pendingDelete = null; render(lastData); };
           acts.append(yb);
+        }
+        if (r.scan && SCAN_ACTIVE.includes(r.scan.state)) {
+          const so = el('button', 'act', 'Open scan'); so.title = 'Open the scan page (it continues where it stopped)';
+          so.onclick = () => openScan(c.name, r.folder, false);
+          acts.append(so);
+        } else if (r.status !== 'recording' && r.status !== 'interrupted' && Object.keys(r.files).some(f => f.startsWith('video'))) {
+          const sb = el('button', 'act', r.scan && r.scan.state === 'done' ? 'Scan again' : 'Scan');
+          sb.title = 'Subtitles, translation and spoken-word moments, made on this PC (Chrome or Edge)';
+          sb.onclick = () => openScan(c.name, r.folder, true);
+          acts.append(sb);
         }
         const del = el('button', 'act del', 'Delete');
         if (r.busy) { del.disabled = true; del.title = "Can't delete now: " + r.busy; }

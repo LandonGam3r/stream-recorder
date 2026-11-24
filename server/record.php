@@ -45,6 +45,7 @@ foreach ([
     'YOUTUBE_CATEGORY'        => '20',
     'UPLOAD_BUDGET'           => 45,
     'UPLOAD_CHUNK_MB'         => 16,
+    'SCAN_WAIT_HOURS'         => 24,
     'DEBUG'                   => false,
 ] as $k => $v) {
     if (!defined($k)) define($k, $v);
@@ -82,6 +83,7 @@ if (!function_exists('curl_init')) {
 const CHANNELS_FILE = __DIR__ . '/channels.json'; // the streamer list, edited from the dashboard
 const MOMENTS_FILE  = __DIR__ . '/moments.json';  // YouTube "moments" rules, edited from the dashboard
 if (is_file(__DIR__ . '/moments.php')) require_once __DIR__ . '/moments.php';
+if (is_file(__DIR__ . '/scan.php')) require_once __DIR__ . '/scan.php';     // PC scan (subtitles, translation, spoken moments)
 const IO_SAMPLE_INTERVAL = 5; // seconds between IO measurements for the dashboard graph
 
 $argvList = $argv ?? ($_SERVER['argv'] ?? []);
@@ -1903,7 +1905,9 @@ function process_uploads(): void
         $job = null;
         queue_update(function (array &$q) use (&$job) {
             foreach ($q as $dir => $j) {
-                if (($j['not_before'] ?? 0) <= time()) { $job = [$dir, $j]; break; }
+                if (($j['not_before'] ?? 0) > time()) continue;
+                if (function_exists('scan_holds_upload') && scan_holds_upload($dir)) continue; // waits for the PC scan
+                $job = [$dir, $j]; break;
             }
         }, 'upload');
         if (!$job) break;
@@ -2261,6 +2265,7 @@ function run_manager(): void
     process_secret_setups();
     check_token_health();
     process_conversions();
+    if (function_exists('process_scans')) process_scans();
     process_uploads();
     flock($lk, LOCK_UN);
 }
@@ -2377,6 +2382,7 @@ function finalize(array $s, string $display, string $chanDir): void
     ]) . "\n";
 
     $yt = youtube_account();
+    $scanAsked = function_exists('scan_after_stream') && scan_after_stream($recDir, channel_settings((string)($GLOBALS['channel'] ?? '')));
     $converting = false;
     if (AUTO_CONVERT && video_sources($recDir)) {
         if (find_ffmpeg()) {
@@ -2390,8 +2396,10 @@ function finalize(array $s, string $display, string $chanDir): void
     }
     if ($yt) {
         if (!$converting) queue_upload($recDir, $yt); // otherwise queued once conversion is done
-        $summary .= "YouTube:          will be uploaded (private) to account '$yt'" . ($converting ? ' after MP4 conversion' : '') . "\n";
+        $summary .= "YouTube:          will be uploaded (private) to account '$yt'" . ($converting ? ' after MP4 conversion' : '')
+            . ($scanAsked ? ', after your PC-scan choice (at most ' . SCAN_WAIT_HOURS . ' h)' : '') . "\n";
     }
+    if ($scanAsked) $summary .= "PC scan:          choose Scan or Skip on the dashboard (subtitles, translation, spoken moments)\n";
 
     write_meta($recDir, $s, $display, ['stream_ended' => date('Y-m-d H:i:s'), 'recorded_seconds' => round((float)$s['seconds'])]);
     embed_meta_in_chat($recDir);

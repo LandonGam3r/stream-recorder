@@ -55,6 +55,7 @@ There is no email: the dashboard is the place to look. "Mark all as read" is rem
   - *Auto*: use your token only on channels where your account is ad-free.
   - *Always*: always use it.
   - *Never*: record anonymously.
+- **PC scan after each stream:** *Ask me* shows a Scan/Skip question after each stream, and a YouTube upload waits for your choice ([pc-scan.md](pc-scan.md)). *Off*: no question; you can still scan any recording with its **Scan** button.
 - **Remove streamer:** available when switched off. Recordings stay until you delete them.
 - **Order:** switched-on streamers first (live ones on top), switched-off ones below. Click a name bar to fold a card to one line.
 
@@ -76,6 +77,7 @@ Each recording shows its title, date, length, files, size and status. Running co
   - A recording still waiting for its MP4 conversion is uploaded right after the conversion.
   - *Cancel upload* takes it out of the queue again. *Upload again* appears for a recording that's already on YouTube.
   - For a stream that's still being recorded, set the account in the streamer's settings instead: it's uploaded when the stream ends.
+- **Scan** opens the [PC scan](pc-scan.md) for subtitles, translation and spoken-word moments. While a scan runs, the recording shows its progress, with *Open scan* to continue and *cancel*. Afterwards the line lists the subtitles and chat translations it has; *Scan again* adds, for example, another translation.
 - **Delete** asks for confirmation, then removes the whole recording folder. It's not possible while that stream is still recording or converting.
 
 ![Player](images/player.png)
@@ -93,6 +95,7 @@ Each recording shows its title, date, length, files, size and status. Running co
 - **Your name:** your own messages get a purple marker, and messages that mention you get a yellow one.
   - Opened from the dashboard, the player knows your name from the Twitch token.
   - Otherwise set it with ⚙ in the chat bar (remembered per browser).
+- **Subtitles and translated chat** after a [PC scan](pc-scan.md): a subtitles menu next to the speed control, and a *Translated* button in the chat bar (hover a message for the original).
 - **Chat sync ±** nudges chat if it feels early or late. Click a chat timestamp to jump there.
 - **Pop out chat** opens chat in its own window for a second screen, with the same search.
 - **Keys:** Space or K (play/pause), ←/→ (5 s), M (mute), F (fullscreen, also double-click), C (chat window).
@@ -109,6 +112,7 @@ Rules that look for specific moments in a recording and tag its YouTube upload:
 | Message from user | Every message from that user |
 | Chat burst | At least N messages (optionally containing a word, e.g. `LUL`) within S seconds: hype moments |
 | Category or title contains | The stream's category or title, at the start or after a change |
+| Streamer says (PC scan) | A word or phrase the streamer said, in the original or the translation. Needs a [PC scan](pc-scan.md) of the recording |
 
 - **Scope:** each rule is for all streamers or one.
 - **Labels:** each rule has a label; tick *in title* to also add it to the title.
@@ -118,4 +122,4 @@ Rules that look for specific moments in a recording and tag its YouTube upload:
 - **When the scan runs:** right after the stream ends and again just before the upload, so rules you add later still apply to recordings waiting for upload. The PC uploader uses the last scan result.
 - **Test first:** *Test on this recording* runs the current rules on any recording and shows the title and description it would get.
 
-The scan works on chat and stream info, not on the picture or sound of the video.
+The scan works on chat, stream info and, after a [PC scan](pc-scan.md), what the streamer said. It doesn't look at the picture.

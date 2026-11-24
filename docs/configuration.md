@@ -29,6 +29,7 @@ Copy `server/config.example.php`.
 | `YOUTUBE_CATEGORY` | `'20'` | YouTube category id (20 = Gaming). |
 | `UPLOAD_BUDGET` | `45` | Seconds of uploading per run; the upload continues next run. |
 | `UPLOAD_CHUNK_MB` | `16` | Upload piece size. |
+| `SCAN_WAIT_HOURS` | `24` | How long a YouTube upload waits for a PC scan you're asked about or running, without progress ([pc-scan.md](pc-scan.md)). |
 | `DEBUG` | `false` | Log every run, including routine offline checks and handovers. |
 
 Not in `config.php` on purpose:

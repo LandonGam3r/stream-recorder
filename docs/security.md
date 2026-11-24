@@ -12,12 +12,12 @@
 - **Without the cookie:** the dashboard shows only the login form; every other address answers 404.
 
 **Dashboard actions**
-- **What can change things:** only adding, switching or removing streamers, their settings, and deleting recordings.
+- **What can change things:** only adding, switching or removing streamers, their settings, YouTube moments rules, queueing or cancelling an upload, PC-scan steps, and deleting recordings.
 - **Protection against other sites:** every change needs a per-site token sent in a header, is checked against the request's origin, and relies on the SameSite cookie.
 - **Path tricks:** streamer and folder names are checked against a strict pattern and resolved to real paths inside the recordings folder.
 - **Shell commands:** anything passed to them is escaped.
 - **Text from outside:** stream titles, chat and names are only ever inserted as plain text, never as HTML.
-- **Browser hardening:** a strict Content-Security-Policy (no external scripts, styles, images or frames), `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, `noindex`.
+- **Browser hardening:** a strict Content-Security-Policy (no external scripts, styles, images or frames; the only exception is the PC scan page, which may load the speech library from jsDelivr and the speech model from Hugging Face), `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, `noindex`.
 
 **Stored tokens**
 - **Encryption:** the Twitch token and YouTube sign-ins are stored with AES-256-GCM. The key is derived from `REC_KEY` with PBKDF2 (200,000 rounds).

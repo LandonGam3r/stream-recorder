@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>PC scan · Stream Recorder™</title>
+<style>
+  :root { --bg: #0f1115; --panel: #171a21; --line: #262a33; --text: #e6e8ec; --muted: #8b93a1; --ok: #3ccf91; --warn: #f2b84b; --bad: #ff6b6b; --accent: #8f7cff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 18px 24px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 24px 48px; display: grid; gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .grid { display: grid; grid-template-columns: 180px 1fr; gap: 10px 14px; align-items: center; }
+  .grid label { color: var(--muted); }
+  select, button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 9px 18px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .bar { height: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 10px 0 6px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  #step { font-weight: 600; }
+  #detail { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  #log { margin: 10px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--muted); max-height: 220px; overflow: auto; }
+  #log li { padding: 2px 0; border-top: 1px solid var(--line); }
+  #log li.bad { color: var(--bad); } #log li.ok { color: var(--ok); } #log li.warn { color: var(--warn); }
+  .msg { padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+  .msg.bad { background: rgba(255,107,107,.1); color: var(--bad); }
+  .msg.warn { background: rgba(242,184,75,.1); color: var(--warn); }
+  .msg.ok { background: rgba(60,207,145,.1); color: var(--ok); }
+  a { color: var(--accent); }
+  #preview { font-size: 13px; max-height: 180px; overflow: auto; margin-top: 10px; }
+  #preview div { padding: 2px 0; } #preview .t { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  #preview .tr { color: var(--muted); display: block; margin-left: 52px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PC scan</h1>
+  <div class="sub" id="what"></div>
+</header>
+<main>
+  <div id="notice"></div>
+
+  <div class="card" id="setup">
+    <h2>Settings</h2>
+    <div class="grid">
+      <label for="spoken">Streamer speaks</label>
+      <select id="spoken"></select>
+      <label for="target">Translate to</label>
+      <select id="target"></select>
+      <label for="chatTr">Chat</label>
+      <label class="row" style="color:var(--text)"><input type="checkbox" id="chatTr" checked> also translate the chat</label>
+      <label for="quality">Speech recognition</label>
+      <select id="quality">
+        <option value="base">Fast (small model, ~150 MB)</option>
+        <option value="small" selected>Good (~300 MB, recommended)</option>
+        <option value="turbo">Best (~1 GB, strong graphics card)</option>
+      </select>
+    </div>
+    <p class="hint">Everything runs on this PC, on its graphics card: only the stream's sound comes from your server (about 2 MB per 10 minutes). The speech model downloads once from Hugging Face and is then kept by the browser; translation uses the translator built into Chrome/Edge. Keep this tab open until it's done. It saves after every 10 minutes of sound, so you can close it and continue later.</p>
+    <div class="row"><button class="primary" id="startBtn">Start scan</button><span class="hint" id="startHint"></span></div>
+  </div>
+
+  <div class="card" id="progress" hidden>
+    <h2>Progress</h2>
+    <div id="step">Starting…</div>
+    <div class="bar"><i id="barFill"></i></div>
+    <div id="detail"></div>
+    <div class="row" id="actions" style="margin-top:10px"></div>
+    <div id="preview"></div>
+    <ul id="log"></ul>
+  </div>
+</main>
+
+<script type="module">
+  const SRC = window.SCAN_SOURCE || {};
+  const LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
+  const MODELS = {
+    base:  { id: 'onnx-community/whisper-base', name: 'Whisper base' },
+    small: { id: 'onnx-community/whisper-small', name: 'Whisper small' },
+    turbo: { id: 'onnx-community/whisper-large-v3-turbo', name: 'Whisper large-v3 turbo' },
+  };
+  const LANGS = ['en', 'nl', 'de', 'fr', 'es', 'it', 'pt', 'pl', 'tr', 'ru', 'uk', 'sv', 'da', 'no', 'fi', 'cs', 'hu', 'ro', 'el', 'ja', 'ko', 'zh', 'ar', 'hi', 'id', 'vi', 'th'];
+  const ACTIVE = ['requested', 'preparing', 'ready', 'scanning'];
+  const $ = s => document.querySelector(s);
+  const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+  const langName = c => { try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(c) || c; } catch (e) { return c; } };
+  const clock = s => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h + ':' + String(m).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const TEST = window.SCAN_TEST || null; // automated tests replace the speech model and translator
+
+  // ------------------------------------------------------------ page setup
+  $('#what').textContent = [SRC.channel, SRC.title || SRC.folder, (SRC.started || '').slice(0, 16), SRC.seconds ? clock(SRC.seconds) : ''].filter(Boolean).join(' · ');
+  document.title = 'PC scan · ' + (SRC.channel || '') + ' · Stream Recorder™';
+  const prefKey = 'scan-prefs-' + (SRC.channel || '');
+  let prefs = {};
+  try { prefs = JSON.parse(localStorage.getItem(prefKey) || localStorage.getItem('scan-prefs') || '{}') || {}; } catch (e) {}
+  const myLang = (navigator.language || 'en').slice(0, 2).toLowerCase();
+  LANGS.forEach(c => $('#spoken').append(Object.assign(el('option', null, langName(c)), { value: c })));
+  $('#target').append(Object.assign(el('option', null, 'No translation'), { value: '' }));
+  LANGS.forEach(c => $('#target').append(Object.assign(el('option', null, langName(c)), { value: c })));
+  $('#spoken').value = prefs.spoken || 'en';
+  $('#target').value = prefs.target != null ? prefs.target : (LANGS.includes(myLang) ? myLang : 'en');
+  $('#quality').value = prefs.quality || 'small';
+  $('#chatTr').checked = prefs.chat !== false;
+  if (!SRC.has_chat) { $('#chatTr').checked = false; $('#chatTr').disabled = true; $('#chatTr').parentElement.append(' (no chat in this recording)'); }
+
+  function notice(text, kind) {
+    const n = $('#notice'); n.replaceChildren();
+    if (text) n.append(el('div', 'msg ' + (kind || 'warn'), text));
+  }
+  function log(text, kind) {
+    const li = el('li', kind || null, new Date().toLocaleTimeString() + '  ' + text);
+    $('#log').prepend(li);
+  }
+  function step(text, pct, detail) {
+    $('#step').textContent = text;
+    if (pct != null) $('#barFill').style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%';
+    $('#detail').textContent = detail || '';
+  }
+  async function api(op, body) {
+    const r = await fetch(SRC.api, { method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': SRC.token },
+      body: JSON.stringify(Object.assign({ op, channel: SRC.channel, folder: SRC.folder }, body || {})) });
+    const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status + (r.status === 404 ? ' (logged out? reload the dashboard)' : '') }));
+    if (!j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+    return j;
+  }
+
+  // What this browser can do.
+  let gpu = null;
+  async function checkBrowser() {
+    const probs = [];
+    if (TEST) return probs;
+    try { if (navigator.gpu) gpu = await navigator.gpu.requestAdapter(); } catch (e) {}
+    if (!gpu) probs.push('No WebGPU graphics card access in this browser, so speech recognition runs on the processor: expect several times longer than the stream itself. Chrome or Edge on a PC with a graphics card is much faster.');
+    if (!('Translator' in self)) probs.push('This browser has no built-in translator (Chrome 138+ or Edge on a desktop PC), so only the subtitles in the spoken language are made.');
+    return probs;
+  }
+  let status = null;
+  async function refreshStatus() { status = await api('status'); return status; }
+
+  (async () => {
+    const probs = await checkBrowser();
+    if (probs.length) notice(probs.join(' '), 'warn');
+    try {
+      await refreshStatus();
+      const st = status.scan.state || '';
+      const done = Object.keys(status.transcript.parts || {}).length;
+      if (st === 'done') $('#startHint').textContent = 'This recording was scanned before. Starting again reuses what is there for the same language and quality, and only adds what\'s missing (e.g. a new translation).';
+      else if (done) $('#startHint').textContent = done + ' piece(s) were already scanned; it continues from there.';
+      else if (st === 'preparing' || st === 'requested') $('#startHint').textContent = 'The server is preparing the sound; you can start already.';
+    } catch (e) { notice('Could not reach the dashboard: ' + e.message, 'bad'); $('#startBtn').disabled = true; }
+  })();
+
+  // ------------------------------------------------------------ translation (built into Chrome/Edge)
+  const translators = {}; // source language -> Translator
+  let detector = null;
+  /** Creates the translators needed right away; must run during the Start click (Chrome may need to download a language pack). */
+  async function prepareTranslation(spoken, target, chat) {
+    if (TEST) { if (target) translators[spoken] = TEST.translator(spoken, target); return; }
+    if (!target || !('Translator' in self)) return;
+    const mk = async (src) => {
+      const opts = { sourceLanguage: src, targetLanguage: target };
+      const a = await Translator.availability(opts);
+      if (a === 'unavailable') { log('No translator for ' + langName(src) + ' → ' + langName(target) + ' in this browser', 'warn'); return null; }
+      return Translator.create(Object.assign({}, opts, { monitor(m) { m.addEventListener('downloadprogress', e => step('Downloading the ' + langName(src) + ' → ' + langName(target) + ' translator…', e.loaded * 100)); } }));
+    };
+    const jobs = [];
+    if (spoken !== target) jobs.push(mk(spoken).then(t => { if (t) translators[spoken] = t; }).catch(e => log('Translator ' + spoken + ': ' + e.message, 'warn')));
+    if (chat && 'LanguageDetector' in self) jobs.push(LanguageDetector.create().then(d => { detector = d; }).catch(e => log('Language detection unavailable: ' + e.message, 'warn')));
+    await Promise.all(jobs);
+  }
+  async function translateText(src, text) {
+    const t = translators[src];
+    if (!t) return '';
+    try { return (await t.translate(text)).trim(); } catch (e) { return ''; }
+  }
+
+  // ------------------------------------------------------------ speech recognition (Whisper, in the browser)
+  let asr = null;
+  async function loadModel(q) {
+    if (TEST) { asr = TEST.asr; return; }
+    step('Loading the speech library…', 0);
+    const tf = await import(LIB);
+    tf.env.allowLocalModels = false;
+    const m = MODELS[q];
+    const files = {};
+    const progress = p => {
+      if (p.status === 'progress' && p.total) {
+        files[p.file] = [p.loaded, p.total];
+        const v = Object.values(files), got = v.reduce((a, x) => a + x[0], 0), all = v.reduce((a, x) => a + x[1], 0);
+        step('Downloading the speech model (only the first time)…', 100 * got / all, (got / 1048576).toFixed(0) + ' of ' + (all / 1048576).toFixed(0) + ' MB');
+      }
+    };
+    const f16 = gpu && gpu.features && gpu.features.has('shader-f16');
+    const tries = gpu
+      ? [{ device: 'webgpu', dtype: { encoder_model: q === 'turbo' && f16 ? 'fp16' : 'fp32', decoder_model_merged: 'q4' } }, { device: 'wasm', dtype: 'q8' }]
+      : [{ device: 'wasm', dtype: 'q8' }];
+    let last;
+    for (const t of tries) {
+      try {
+        asr = await tf.pipeline('automatic-speech-recognition', m.id, Object.assign({ progress_callback: progress }, t));
+        log(m.name + ' loaded (' + (t.device === 'webgpu' ? 'graphics card' : 'processor') + ')', 'ok');
+        return;
+      } catch (e) { last = e; log('Could not load ' + m.name + ' on the ' + (t.device === 'webgpu' ? 'graphics card' : 'processor') + ': ' + e.message, 'warn'); }
+    }
+    throw new Error('the speech model could not be loaded (' + (last && last.message) + ')');
+  }
+
+  /** One sound piece -> subtitle lines [[start, end, text], ...] in video time. */
+  async function transcribePiece(samples, offset, end, spoken) {
+    const out = await asr(samples, { language: spoken, task: 'transcribe', return_timestamps: true, chunk_length_s: 29, stride_length_s: 5 });
+    const segs = [];
+    let prev = '', rep = 0;
+    for (const c of out.chunks || []) {
+      const text = (c.text || '').trim();
+      if (!text || /^[\[(].*[\])]$/.test(text)) continue;          // [Music], (silence), [BLANK_AUDIO]
+      rep = text === prev ? rep + 1 : 0; prev = text;
+      if (rep >= 2) continue;                                       // the model repeating itself on silence
+      let s = offset + (c.timestamp && c.timestamp[0] != null ? c.timestamp[0] : 0);
+      let e = offset + (c.timestamp && c.timestamp[1] != null ? c.timestamp[1] : (c.timestamp ? c.timestamp[0] + 3 : 3));
+      s = Math.min(s, end); e = Math.min(Math.max(e, s + 0.5), end + 1);
+      segs.push([+s.toFixed(2), +e.toFixed(2), text]);
+    }
+    return segs;
+  }
+
+  async function decodePiece(buf) {
+    // Decoded straight to mono 16 kHz, what Whisper expects.
+    const ctx = new OfflineAudioContext(1, 16000, 16000);
+    const ab = await ctx.decodeAudioData(buf);
+    return ab.getChannelData(0);
+  }
+
+  // ------------------------------------------------------------ the run
+  let running = false, wake = null, stopFlag = false;
+  async function keepAwake() { try { if (navigator.wakeLock && document.visibilityState === 'visible') wake = await navigator.wakeLock.request('screen'); } catch (e) {} }
+  document.addEventListener('visibilitychange', () => { if (running && document.visibilityState === 'visible') keepAwake(); });
+  window.addEventListener('beforeunload', e => { if (running) { e.preventDefault(); e.returnValue = ''; } });
+
+  $('#startBtn').addEventListener('click', async () => {
+    const spoken = $('#spoken').value, target = $('#target').value, q = $('#quality').value, chat = $('#chatTr').checked;
+    try { localStorage.setItem(prefKey, JSON.stringify({ spoken, target, quality: q, chat })); localStorage.setItem('scan-prefs', JSON.stringify({ spoken, target, quality: q, chat })); } catch (e) {}
+    $('#startBtn').disabled = true;
+    $('#progress').hidden = false;
+    $('#actions').replaceChildren();
+    notice('');
+    running = true; stopFlag = false;
+    keepAwake();
+    try {
+      // Translators first: Chrome only downloads a language pack right after a click.
+      step('Preparing the translator…', 0);
+      await prepareTranslation(spoken, target, chat);
+      await run(spoken, target === spoken ? '' : target, q, chat);
+    } catch (e) {
+      running = false;
+      step('Stopped', null, '');
+      log(e.message, 'bad');
+      showFailure(e.message);
+    }
+    running = false;
+    try { if (wake) await wake.release(); } catch (e) {}
+  });
+
+  function showFailure(msg) {
+    const a = $('#actions'); a.replaceChildren();
+    notice('The scan stopped: ' + msg, 'bad');
+    const again = el('button', 'primary', 'Try again'); again.onclick = () => { notice(''); $('#startBtn').disabled = false; $('#startBtn').click(); };
+    const give = el('button', null, 'Give up (a YouTube upload goes ahead without it)');
+    give.onclick = async () => { try { await api('fail', { error: msg }); notice('Given up. The recording is uploaded as usual if YouTube upload is on.', 'warn'); a.replaceChildren(); } catch (e) { notice(e.message, 'bad'); } };
+    a.append(again, give);
+  }
+
+  async function run(spoken, target, q, chat) {
+    await refreshStatus();
+    const tr = status.transcript;
+    let saved = tr.parts || {};
+    // Saved pieces only count when they were made the same way.
+    if (Object.keys(saved).length && (tr.language !== spoken || tr.model !== MODELS[q].id)) {
+      log('Earlier pieces were made with another language or quality - starting over', 'warn');
+      saved = {};
+    }
+    let pieces = status.pieces;
+    const savedCount = Object.keys(saved).length;
+    const allSaved = savedCount && status.scan.pieces && savedCount >= status.scan.pieces;
+    const loading = allSaved ? Promise.resolve() : loadModel(q); // meanwhile the server can prepare the sound
+    loading.catch(() => {});
+    if (!allSaved && !pieces.length) {
+      if (!ACTIVE.includes(status.scan.state)) { await api('request'); log('Asked the server to prepare the sound'); }
+      pieces = await waitForSound();
+    }
+    const total = allSaved ? status.scan.pieces : pieces.length;
+    const t0 = performance.now();
+    let doneSecs = 0, workSecs = 0;
+    const totalSecs = pieces.length ? pieces[pieces.length - 1][2] : (SRC.seconds || 1);
+
+    for (let i = 0; i < total; i++) {
+      if (stopFlag) throw new Error('stopped');
+      const key = String(i);
+      const [file, start, end] = pieces[i] || [null, 0, 0];
+      if (saved[key]) {
+        let segs = saved[key];
+        // Already scanned: only add a missing translation.
+        if (target && translators[spoken] && segs.some(g => !g[3])) {
+          step('Translating piece ' + (i + 1) + ' of ' + total + '…', 100 * i / total);
+          segs = await translateSegs(segs, spoken);
+          await api('save', { part: i, segments: segs, language: spoken, target, model: MODELS[q].id, pieces: total });
+        }
+        showPreview(segs);
+        continue;
+      }
+      await loading;
+      step('Piece ' + (i + 1) + ' of ' + total + ': downloading sound…', 100 * i / total, clock(start) + ' – ' + clock(end));
+      const r = await fetch(SRC.files + encodeURIComponent('audio/' + file), { credentials: 'same-origin', cache: 'no-store' });
+      if (!r.ok) throw new Error('could not download sound piece ' + (i + 1) + ' (HTTP ' + r.status + ')');
+      const samples = await decodePiece(await r.arrayBuffer());
+      const w0 = performance.now();
+      step('Piece ' + (i + 1) + ' of ' + total + ': recognising speech…', 100 * (i + 0.15) / total, eta(doneSecs, workSecs, totalSecs) );
+      let segs = await transcribePiece(samples, start, end, spoken);
+      if (target && translators[spoken]) {
+        step('Piece ' + (i + 1) + ' of ' + total + ': translating…', 100 * (i + 0.85) / total, eta(doneSecs, workSecs, totalSecs));
+        segs = await translateSegs(segs, spoken);
+      }
+      await api('save', { part: i, segments: segs, language: spoken, target: translators[spoken] ? target : '', model: MODELS[q].id, pieces: total });
+      workSecs += (performance.now() - w0) / 1000;
+      doneSecs += end - start;
+      log('Piece ' + (i + 1) + ' of ' + total + ' saved: ' + segs.length + ' lines (' + clock(start) + ' – ' + clock(end) + ')');
+      showPreview(segs);
+    }
+    step('Saving subtitles…', 100);
+    await api('finish');
+    log('Subtitles saved' + (target && translators[spoken] ? ' (' + langName(spoken) + ' and ' + langName(target) + ')' : ''), 'ok');
+    running = false; // the part that holds the YouTube upload is done
+
+    let chatNote = '';
+    if (chat && target) chatNote = await translateChat(target);
+    step('Done', 100, 'Took ' + Math.max(1, Math.round((performance.now() - t0) / 60000)) + ' min');
+    notice('Done. Subtitles' + (chatNote ? ' and ' + chatNote : '') + ' are saved with the recording; spoken-word moments are added at the next cron run, before a YouTube upload.', 'ok');
+    if (SRC.player) { const p = el('a', null, '▶ Open in the player'); p.href = SRC.player; $('#actions').prepend(p); }
+  }
+
+  function eta(doneSecs, workSecs, totalSecs) {
+    if (!doneSecs || !workSecs) return '';
+    const speed = doneSecs / workSecs;
+    return speed.toFixed(1) + '× real time · ~' + Math.max(1, Math.round((totalSecs - doneSecs) / speed / 60)) + ' min left';
+  }
+
+  async function translateSegs(segs, spoken) {
+    const out = [];
+    for (const g of segs) out.push(g[3] ? g : [g[0], g[1], g[2], await translateText(spoken, g[2])]);
+    return out;
+  }
+
+  function showPreview(segs) {
+    const p = $('#preview');
+    segs.slice(-6).forEach(g => {
+      const d = el('div'); d.append(el('span', 't', clock(g[0])), g[2]);
+      if (g[3]) d.append(el('span', 'tr', g[3]));
+      p.append(d);
+    });
+    while (p.children.length > 30) p.firstChild.remove();
+    p.scrollTop = p.scrollHeight;
+  }
+
+  async function waitForSound() {
+    const t0 = Date.now();
+    for (;;) {
+      await refreshStatus();
+      const s = status.scan;
+      if (status.pieces.length && s.state !== 'preparing' && s.state !== 'requested') return status.pieces;
+      if (s.state === 'failed') throw new Error('the server could not prepare the sound: ' + (s.error || 'unknown'));
+      if (s.state === 'cancelled') throw new Error('the scan was cancelled on the dashboard');
+      const mins = Math.floor((Date.now() - t0) / 60000);
+      step(s.state === 'preparing' ? 'The server is preparing the sound…' : 'Waiting for the server (it starts at its next cron run)…', null,
+        (s.note ? s.note + ' · ' : '') + (mins ? mins + ' min so far' : ''));
+      await sleep(TEST ? 300 : 10000);
+    }
+  }
+
+  // ------------------------------------------------------------ chat translation
+  async function translateChat(target) {
+    step('Translating chat: reading messages…', 0);
+    const r = await fetch(SRC.files + 'chat.txt', { credentials: 'same-origin', cache: 'no-store' });
+    if (!r.ok) { log('Could not load the chat (HTTP ' + r.status + ')', 'warn'); return ''; }
+    const texts = new Set();
+    const re = /^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?\] (.*)$/;
+    for (const line of (await r.text()).split(/\r?\n/)) {
+      const m = re.exec(line); if (!m) continue;
+      let body = m[1], txt = body;
+      if (body.startsWith('** ')) continue; // notices from Twitch itself
+      if (body.startsWith('* ')) { const p = body.slice(2).indexOf(' '); txt = body.slice(3 + p); }
+      else { const p = body.indexOf(': '); if (p > 0 && p < 40) txt = body.slice(p + 2); }
+      // Worth translating: at least a few letters, not just a link.
+      if (txt.length >= 4 && /\p{L}{3}/u.test(txt) && !/^https?:\/\/\S+$/.test(txt)) texts.add(txt);
+    }
+    const list = [...texts];
+    if (!list.length) return '';
+    if (!detector && !TEST) { log('No language detection in this browser - chat not translated', 'warn'); return ''; }
+    const map = {}, missing = {};
+    let n = 0, translated = 0;
+    const t0 = performance.now();
+    for (const txt of list) {
+      if (++n % 200 === 0) {
+        step('Translating chat…', 100 * n / list.length, n + ' of ' + list.length + ' different messages · ' + translated + ' translated');
+        await sleep(0);
+      }
+      let src;
+      try {
+        const res = TEST ? TEST.detect(txt) : await detector.detect(txt);
+        const top = res && res[0];
+        if (!top || top.confidence < 0.7 || top.detectedLanguage === 'und') continue;
+        src = top.detectedLanguage.split('-')[0];
+      } catch (e) { continue; }
+      if (src === target) continue;
+      if (!(src in translators)) {
+        translators[src] = null;
+        if (TEST) translators[src] = TEST.translator(src, target);
+        else if ('Translator' in self) {
+          try {
+            const opts = { sourceLanguage: src, targetLanguage: target };
+            // Without a click, Chrome can only use language packs it already has.
+            if (await Translator.availability(opts) === 'available') translators[src] = await Translator.create(opts);
+          } catch (e) {}
+        }
+      }
+      if (!translators[src]) { missing[src] = (missing[src] || 0) + 1; continue; }
+      const out = await translateText(src, txt);
+      if (out && out !== txt) { map[txt] = out; translated++; }
+    }
+    await api('chat', { target, map });
+    log('Chat: ' + translated + ' messages translated (of ' + list.length + ' different ones) in ' + Math.max(1, Math.round((performance.now() - t0) / 1000)) + ' s', 'ok');
+    const miss = Object.entries(missing).sort((a, b) => b[1] - a[1]);
+    if (miss.length) {
+      log('Not translated (no language pack yet): ' + miss.map(([l, k]) => langName(l) + ' ' + k).join(', '), 'warn');
+      const b = el('button', null, 'Download those language packs and translate them too');
+      b.onclick = async () => {
+        b.disabled = true;
+        for (const [l] of miss) {
+          try { translators[l] = await Translator.create({ sourceLanguage: l, targetLanguage: target }); } catch (e) { log('No translator for ' + langName(l), 'warn'); }
+        }
+        await translateChat(target);
+        b.remove();
+      };
+      $('#actions').append(b);
+    }
+    return 'the translated chat';
+  }
+</script>
+</body>
+</html>

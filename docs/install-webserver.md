@@ -7,7 +7,7 @@ The examples use cPanel and the home folder `/home/you/`. Replace `you` with you
 ## 1. The recorder
 
 1. In the **File Manager**, create a folder `twitch-recorder` in your **home folder**: next to `public_html`, **not inside it**, so recordings and secrets can never be downloaded from the web.
-2. Upload the contents of `server/` into it: `record.php`, `moments.php` and `config.example.php`.
+2. Upload the contents of `server/` into it: `record.php`, `moments.php`, `scan.php` and `config.example.php`.
 3. Optional: copy `config.example.php` to `config.php` and change settings. Every setting is explained in the file and in [configuration.md](configuration.md). Common ones:
    - `QUALITY`: `best` ≈ 2.8 GB per hour at 1080p60, `480p30` ≈ 0.6 GB per hour.
    - `TIMEZONE`: e.g. `'Europe/Amsterdam'`.
@@ -48,7 +48,7 @@ If your host has no ffmpeg:
 ## 4. The dashboard
 
 1. Create a folder in `public_html` with a name that's hard to guess, e.g. `rec-7f3k9q`.
-2. Upload `dashboard/index.php` and `dashboard/player.html` into it.
+2. Upload `dashboard/index.php`, `dashboard/player.html` and `dashboard/scan.html` into it.
 3. Open `https://your-site/rec-7f3k9q/`.
    - The dashboard finds the recorder by itself when it's at `/home/you/twitch-recorder` (two levels up from the dashboard folder).
    - Elsewhere: copy `config.example.php` to `config.php` next to `index.php` and set `RECORDER_DIR`.
@@ -62,7 +62,7 @@ Optional extras: [ad-free recording with your Twitch login](twitch-token.md) and
 
 ## Updating
 
-Replace `record.php`, `moments.php`, `index.php` and `player.html` with the new versions (see [CHANGELOG.md](../CHANGELOG.md) for what changed). Your settings (`config.php`), streamers, recordings and keys are untouched. It's safe while recording: the next run uses the new file.
+Replace `record.php`, `moments.php`, `scan.php`, `index.php`, `player.html` and `scan.html` with the new versions (see [CHANGELOG.md](../CHANGELOG.md) for what changed). Your settings (`config.php`), streamers, recordings and keys are untouched. It's safe while recording: the next run uses the new file.
 
 ## Stopping
 

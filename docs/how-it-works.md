@@ -21,6 +21,7 @@ flowchart LR
   - **Manager** (started every minute without arguments): reads the streamer list, starts a recording run for each switched-on streamer, and does the background work (token check, conversions, uploads, IO sampling). Each piece runs as its own short process.
   - **Recording run** (`record.php <streamer>`): checks whether the streamer is live and records video and chat.
 - **`dashboard/index.php`**: the web interface, plus a small JSON API used by the page itself. It never talks to Twitch; it reads the recorder's files and writes only `channels.json` and deletions.
+- **`dashboard/scan.html`**: the PC scan page; runs speech recognition and translation in your browser ([pc-scan.md](pc-scan.md)).
 - **`dashboard/player.html`** and **`pc-tools/player.html`**: the same player file, served by the dashboard or opened from disk.
 
 ## Recording in relays
@@ -62,6 +63,7 @@ The playback session is reused between runs (~20 min), so to Twitch it looks lik
 server/
   record.php, config.php
   moments.php                YouTube moments scanner (used by record.php and the dashboard)
+  scan.php                   PC scan: prepares the sound, holds uploads, writes subtitles
   channels.json              streamer list (the dashboard edits it)
   moments.json               YouTube moments rules (the dashboard edits them)
   recordings/
@@ -75,6 +77,10 @@ server/
         chat.txt             chat, first line = sync info
         meta.json            title, times, timeline, title/category changes, moments, YouTube link
         summary.txt          end-of-stream summary
+        scan.json            PC-scan state (only when asked or scanned)
+        transcript.json      what was said, with times and translation (PC scan)
+        subtitles.vtt, subtitles.<lang>.vtt, chat_translation.<lang>.json
+        audio/partNNN.ogg    sound pieces for a running PC scan (deleted when done)
   secret/                    dashboard key, encrypted tokens (never web-reachable)
   last_run.txt, cron_output.txt
 ```

@@ -92,6 +92,10 @@
   .msg .ts { color: var(--muted); font-size: .8em; margin-right: 6px; font-variant-numeric: tabular-nums; cursor: pointer; }
   .msg .ts:hover { color: var(--accent); text-decoration: underline; }
   .msg .name { font-weight: 700; }
+  .msg.trd .body { font-style: italic; }
+  .chatbar button.on { border-color: var(--accent); color: var(--accent); }
+  #cSubs { background: rgba(0,0,0,.4); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; font: inherit; font-size: 12px; padding: 3px 4px; margin-right: 4px; max-width: 170px; }
+  video::cue { background: rgba(0,0,0,.7); font-size: 1.05em; }
   .msg.sys { color: #c9b8ff; background: rgba(155,135,255,.08); border-left: 3px solid var(--accent); padding: 4px 8px; margin: 3px 0; border-radius: 4px; }
   .msg.mod { color: var(--muted); font-style: italic; }
   .msg.act { font-style: italic; }
@@ -134,6 +138,7 @@
         <input id="cVol" type="range" min="0" max="1" step="0.05" value="1" title="Volume">
         <span id="cTime">0:00 / 0:00</span>
         <span class="grow"></span>
+        <select id="cSubs" title="Subtitles (from the PC scan)" style="display:none"></select>
         <select id="cRate" title="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
         <button id="cFull" class="ic" title="Fullscreen (F)"></button>
       </div>
@@ -224,6 +229,51 @@
     };
   }
 
+  // ------------------------------------------------------------ PC-scan extras: subtitles and translated chat
+  let chatTr = null, chatTrLang = '', showTr = false;
+  try { showTr = localStorage.getItem('stream-player-chat-tr') !== '0'; } catch (e) {}
+  function langName(c) { if (!c) return ''; try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(c) || c; } catch (e) { return c; } }
+  /** subs: [{url, lang, original}], chatTrs: [{lang, text}] */
+  function setupExtras(subs, chatTrs) {
+    video.querySelectorAll('track').forEach(t => t.remove());
+    const sel = document.getElementById('cSubs');
+    sel.replaceChildren(new Option('Subtitles off', 'off'));
+    subs.forEach((x, i) => {
+      const t = document.createElement('track');
+      t.kind = 'subtitles'; t.src = x.url; t.srclang = x.lang || 'und';
+      t.label = x.original ? 'Spoken' + (x.lang ? ' (' + langName(x.lang) + ')' : '') : langName(x.lang) + ' (translated)';
+      video.appendChild(t);
+      sel.appendChild(new Option(t.label, String(i)));
+    });
+    sel.style.display = subs.length ? '' : 'none';
+    const apply = () => {
+      [...video.textTracks].forEach((tt, i) => { tt.mode = String(i) === sel.value ? 'showing' : 'disabled'; });
+    };
+    let pref = 'off';
+    try { pref = localStorage.getItem('stream-player-subs') || 'off'; } catch (e) {}
+    // Remembered as "translated"/"spoken", so the choice carries over between recordings.
+    const idx = pref === 'off' ? -1 : subs.findIndex(x => pref === 'spoken' ? x.original : !x.original);
+    sel.value = idx >= 0 ? String(idx) : 'off';
+    sel.onchange = () => {
+      const x = subs[+sel.value];
+      try { localStorage.setItem('stream-player-subs', sel.value === 'off' ? 'off' : (x && x.original ? 'spoken' : 'translated')); } catch (e) {}
+      apply(); sel.blur();
+    };
+    setTimeout(apply, 0);
+    chatTr = null; chatTrLang = '';
+    for (const c of chatTrs) {
+      try { const j = JSON.parse(c.text); if (j && j.map) { chatTr = j.map; chatTrLang = j.target || c.lang; break; } } catch (e) {}
+    }
+  }
+  /** Extras from files in a local folder. */
+  function extrasFromFiles(files) {
+    const subs = files.filter(f => /^subtitles(\.[a-z-]+)?\.vtt$/i.test(f.name))
+      .map(f => { const m = /^subtitles\.([a-z-]+)\.vtt$/i.exec(f.name); return { url: URL.createObjectURL(f), lang: m ? m[1] : '', original: !m }; })
+      .sort((a, b) => (b.original ? 1 : 0) - (a.original ? 1 : 0));
+    const chats = files.filter(f => /^chat_translation\.[a-z-]+\.json$/i.test(f.name));
+    return { subs, chats };
+  }
+
   function parseChat(text, startMs, mapper) {
     const out = [];
     const re = /^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?)\] (.*)$/;
@@ -282,7 +332,14 @@
       d.appendChild(n);
       d.appendChild(doc.createTextNode(m.kind === 'act' ? ' ' : ': '));
     }
-    markText(doc, d, m.text, asResult && search.field === 'text' ? search.q : '');
+    const tr = showTr && chatTr && !asResult ? chatTr[m.text] : null;
+    if (tr) {
+      d.classList.add('trd');
+      const b = doc.createElement('span'); b.className = 'body'; b.textContent = tr; b.title = 'Original: ' + m.text;
+      d.appendChild(b);
+    } else {
+      markText(doc, d, m.text, asResult && search.field === 'text' ? search.q : '');
+    }
     return d;
   }
 
@@ -368,7 +425,20 @@
     meRow.style.display = meName ? 'none' : 'flex';
     const meToggle = doc.createElement('button'); meToggle.textContent = '⚙'; meToggle.title = 'Your name (your messages and mentions are highlighted)';
     meToggle.addEventListener('click', () => { meRow.style.display = meRow.style.display === 'none' ? 'flex' : 'none'; });
-    bar.append(inp, sel, mine, meToggle, meRow, info);
+    bar.append(inp, sel, mine, meToggle);
+    if (chatTr) {
+      const tb = doc.createElement('button'); tb.textContent = 'Translated'; tb.className = showTr ? 'on' : '';
+      tb.title = 'Show chat translated to ' + langName(chatTrLang) + ' (hover a message for the original)';
+      tb.addEventListener('click', () => {
+        showTr = !showTr;
+        try { localStorage.setItem('stream-player-chat-tr', showTr ? '1' : '0'); } catch (e) {}
+        forEachBar(b => { const x = b.querySelector('button.trbtn'); if (x) x.className = 'trbtn' + (showTr ? ' on' : ''); });
+        rebuild();
+      });
+      tb.className = 'trbtn' + (showTr ? ' on' : '');
+      bar.append(tb);
+    }
+    bar.append(meRow, info);
   }
   function fillUserList(doc) {
     let dl = doc.getElementById('chatUsers');
@@ -496,9 +566,11 @@
     }
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     videoUrl = URL.createObjectURL(vid);
+    const ex = extrasFromFiles(files);
     start({ url: videoUrl, name: vid.name, size: vid.size,
       chatText: chatFile ? await chatFile.text() : null,
-      metaText: metaFile ? await metaFile.text() : null });
+      metaText: metaFile ? await metaFile.text() : null,
+      subs: ex.subs, chatTrs: await Promise.all(ex.chats.map(async f => ({ lang: '', text: await f.text() }))) });
   }
 
   // Shared by local files and recordings opened from the dashboard.
@@ -532,6 +604,7 @@
       toast('Saved chat.txt with the sync info built in. Replace the old chat.txt with it; meta.json is then no longer needed.', 8000);
     };
 
+    setupExtras(src.subs || [], src.chatTrs || []);
     video.src = src.url;
     setupThumbs(src.url, !src.remote);
     if (!mePinned && src.me) { meName = String(src.me); }
@@ -572,7 +645,10 @@
     };
     try {
       const [chatText, metaText] = await Promise.all([get(src.chat), get(src.meta)]);
-      start({ url: src.video, name: src.name, size: src.size, chatText, metaText, remote: true, me: src.me });
+      const extras = src.extras || [];
+      const chatTrs = await Promise.all(extras.filter(x => x.kind === 'chat').map(async x => ({ lang: x.lang, text: await get(x.url).catch(() => '') })));
+      start({ url: src.video, name: src.name, size: src.size, chatText, metaText, remote: true, me: src.me,
+        subs: extras.filter(x => x.kind === 'subs').map(x => ({ url: x.url, lang: x.lang, original: !!x.original })), chatTrs });
     } catch (e) {
       toast('Could not load this recording (' + e.message + '). Reload the page to try again.', 10000);
     }
@@ -648,7 +724,8 @@
     window.addEventListener('beforeunload', warnLeave);
     try {
       // Chat and meta first (small).
-      for (const [url, name] of [[src.chat, 'chat.txt'], [src.meta, 'meta.json']]) {
+      const extraFiles = (src.extras || []).map(x => [x.url, x.name]);
+      for (const [url, name] of [[src.chat, 'chat.txt'], [src.meta, 'meta.json']].concat(extraFiles)) {
         if (!url) continue;
         const r = await fetch(url, { credentials: 'same-origin', signal });
         if (!r.ok) throw new Error(name + ': HTTP ' + r.status);
@@ -713,7 +790,7 @@
       window.removeEventListener('beforeunload', warnLeave);
       dlAbort = null;
       const files = [await fh.getFile()];
-      for (const n of ['chat.txt', 'meta.json']) {
+      for (const n of ['chat.txt', 'meta.json'].concat(extraFiles.map(x => x[1]))) {
         try { files.push(await (await dir.getFileHandle(n)).getFile()); } catch (e) {}
       }
       ui.hide();

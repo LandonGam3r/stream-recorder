@@ -12,7 +12,7 @@
  *   type 'category' - the stream's category or title contains value (at the start or after a change)
  */
 
-const MOMENT_TYPES = ['text', 'user', 'burst', 'category'];
+const MOMENT_TYPES = ['text', 'user', 'burst', 'category', 'speech'];
 
 // Without PHP's mbstring extension: simple stand-ins (case-insensitive for plain letters only).
 if (!function_exists('mb_stripos')) { function mb_stripos($h, $n) { return stripos($h, $n); } }
@@ -83,8 +83,26 @@ function moments_scan(string $dir, array $rules, string $channel): array
         }
     }
 
+    // What the streamer said: transcript.json from the PC scan (original text and its translation).
+    $speechRules = array_values(array_filter($rules, function ($r) { return $r['type'] === 'speech'; }));
+    if ($speechRules && is_file("$dir/transcript.json")) {
+        $tr = json_decode((string)@file_get_contents("$dir/transcript.json"), true) ?: [];
+        foreach ($tr['segments'] ?? [] as $seg) {
+            if (!is_array($seg) || !isset($seg[0], $seg[2])) continue;
+            $said = (string)$seg[2];
+            $trans = (string)($seg[3] ?? '');
+            foreach ($speechRules as $r) {
+                $v = trim((string)($r['value'] ?? ''));
+                if ($v === '') continue;
+                if (mb_stripos($said, $v) !== false || ($trans !== '' && mb_stripos($trans, $v) !== false)) {
+                    $add($r, (float)$seg[0], $cut('"' . trim($said) . '"', 80));
+                }
+            }
+        }
+    }
+
     // Chat, line by line (chat files can be large).
-    $chatRules = array_values(array_filter($rules, function ($r) { return $r['type'] !== 'category'; }));
+    $chatRules = array_values(array_filter($rules, function ($r) { return !in_array($r['type'], ['category', 'speech'], true); }));
     $h = $chatRules ? @fopen("$dir/chat.txt", 'rb') : false;
     if ($h) {
         // Sync info can also (or only) be in chat.txt's first line, like the player reads it.

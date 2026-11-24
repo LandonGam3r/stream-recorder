@@ -23,6 +23,14 @@ jobs:
           PY
             node --check /tmp/check.js
           done
+      - name: Scan page syntax (module script)
+        run: |
+          python3 - <<'PY'
+          src = open('dashboard/scan.html', encoding='utf-8').read()
+          a = src.rindex('<script type="module">') + len('<script type="module">'); b = src.rindex('</script>')
+          open('/tmp/scan.mjs', 'w').write(src[a:b])
+          PY
+          node --check /tmp/scan.mjs
       - name: Players are identical
         run: cmp dashboard/player.html pc-tools/player.html
       - name: Python syntax
