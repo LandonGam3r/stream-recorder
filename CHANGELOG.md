@@ -2,6 +2,11 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.3.3] - 2026-11-24
+
+### Changed
+- **The scan page says when it's waiting for the speech model.** It used to keep showing "downloading sound" while the model was still loading onto the graphics card. If loading takes over 4 minutes, it explains why and offers *Switch to "Good" and restart* (for *Best*) or *Reload and restart*. It also notes in the log when *Best* needs its full-size 2.7 GB version because the graphics card has no 16-bit support in the browser.
+
 ## [1.3.2] - 2026-11-24
 
 ### Changed
@@ -98,6 +103,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.3.3]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.2.0...v1.3.0

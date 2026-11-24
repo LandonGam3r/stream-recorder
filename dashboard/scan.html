@@ -587,7 +587,7 @@
   // ============================================================ speech recognition (Whisper, in the browser)
   let asr = null;
   async function loadModel(q) {
-    if (TEST) { asr = TEST.asr; return; }
+    if (TEST) { if (TEST.loadDelay) await sleep(TEST.loadDelay); asr = TEST.asr; return; }
     modelLine('Speech model: loading the library…');
     const tf = await import(LIB);
     tf.env.allowLocalModels = false;
@@ -605,6 +605,7 @@
       }
     };
     const f16 = gpu && gpu.features && gpu.features.has('shader-f16');
+    if (q === 'turbo' && gpu && !f16) log('This graphics card has no 16-bit support in the browser, so "Best" needs its full-size version (about 2.7 GB)', 'warn');
     const tries = gpu
       ? [{ device: 'webgpu', dtype: { encoder_model: q === 'turbo' && f16 ? 'fp16' : 'fp32', decoder_model_merged: 'q4' } }, { device: 'wasm', dtype: 'q8' }]
       : [{ device: 'wasm', dtype: 'q8' }];
@@ -731,7 +732,7 @@
       }
       step('Piece ' + (i + 1) + ' of ' + total + ': ' + (LOCAL ? 'reading' : 'downloading') + ' sound…', 100 * i / total, clock(start) + ' – ' + clock(end));
       const samples = await B.samples(i, piece);
-      await loading;
+      await waitForModel(loading, i, total, q);
       const w0 = performance.now();
       step('Piece ' + (i + 1) + ' of ' + total + ': recognising speech…', 100 * (i + 0.15) / total, eta(doneSecs, workSecs, totalSecs));
       let segs = await transcribePiece(samples, start, end, spoken);
@@ -757,6 +758,33 @@
     const url = B.playerUrl();
     if (url) { const pl = el('a', null, '▶ Open in the player'); pl.href = url; $('#actions').prepend(pl); }
     if (LOCAL) { $('#pickBtn').disabled = false; $('#startBtn').disabled = false; }
+  }
+
+  /** Waits for the speech model, saying so; a large model that takes very long gets a way out. */
+  async function waitForModel(loading, i, total, q) {
+    const t0 = Date.now();
+    let warned = false, b = null;
+    for (;;) {
+      if (await Promise.race([loading.then(() => true), sleep(TEST ? 50 : 5000).then(() => false)])) {
+        if (b) { b.remove(); notice(''); } // it made it after all
+        return;
+      }
+      const mins = Math.floor((Date.now() - t0) / 60000);
+      step('Piece ' + (i + 1) + ' of ' + total + ': sound ready, waiting for the speech model to load…', 100 * i / total,
+        (mins ? mins + ' min so far' : 'a moment'));
+      if (!warned && Date.now() - t0 > (TEST ? 1000 : 4 * 60000)) {
+        warned = true;
+        notice(q === 'turbo'
+          ? 'Loading the "Best" model is taking very long. It may not fit on this graphics card, or the browser stopped without an error. "Good" loads in seconds and is usually close in quality.'
+          : 'Loading the speech model is taking very long. The browser may have stopped without an error; reloading the page usually helps.', 'warn');
+        b = el('button', 'primary', q === 'turbo' ? 'Switch to "Good" and restart' : 'Reload and restart');
+        b.onclick = () => {
+          try { const p = JSON.parse(localStorage.getItem(prefKey) || '{}'); if (q === 'turbo') p.quality = 'small'; localStorage.setItem(prefKey, JSON.stringify(p)); } catch (e) {}
+          running = false; location.reload();
+        };
+        $('#actions').append(b);
+      }
+    }
   }
 
   function eta(doneSecs, workSecs, totalSecs) {
