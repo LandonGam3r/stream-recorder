@@ -80,6 +80,8 @@ if (!function_exists('curl_init')) {
 }
 
 const CHANNELS_FILE = __DIR__ . '/channels.json'; // the streamer list, edited from the dashboard
+const MOMENTS_FILE  = __DIR__ . '/moments.json';  // YouTube "moments" rules, edited from the dashboard
+if (is_file(__DIR__ . '/moments.php')) require_once __DIR__ . '/moments.php';
 const IO_SAMPLE_INTERVAL = 5; // seconds between IO measurements for the dashboard graph
 
 $argvList = $argv ?? ($_SERVER['argv'] ?? []);
@@ -313,9 +315,31 @@ if (($state['stream_id'] ?? null) !== $stream['id']) {
     $state['kills']++;
 }
 
+// Title and category can change during a stream, and right at the start Twitch sometimes still
+// reports them empty: every run takes the latest, and changes are kept (meta.json "changes").
+$titleChanged = false;
+$nt = trim((string)($stream['title'] ?? ''));
+$ng = trim((string)($stream['game']['name'] ?? ''));
+if (($nt !== '' && $nt !== ($state['title'] ?? '')) || ($ng !== '' && $ng !== ($state['game'] ?? ''))) {
+    $wasKnown = ($state['title'] ?? '') !== '' || ($state['game'] ?? '') !== '';
+    if ($wasKnown) {
+        if (empty($state['changes'])) { // keep what it was at the start too
+            $state['changes'][] = ['time' => date('Y-m-d H:i:s', strtotime($state['started_at'])), 'video' => 0, 'title' => $state['title'], 'game' => $state['game']];
+        }
+        $state['changes'][] = ['time' => date('Y-m-d H:i:s'), 'video' => round((float)($state['seconds'] ?? 0)), 'title' => $nt, 'game' => $ng];
+        logmsg(sprintf('Stream changed: "%s" (%s) -> "%s" (%s)', $state['title'], $state['game'], $nt ?: $state['title'], $ng ?: $state['game']));
+    } else {
+        logmsg(sprintf('Title now known: "%s" (%s)', $nt, $ng));
+    }
+    if ($nt !== '') $state['title'] = $nt;
+    if ($ng !== '') $state['game'] = $ng;
+    $titleChanged = true;
+}
+
 // ---------------------------------------------------------------- record
 $recDir = $chanDir . '/' . $state['dir'];
 @mkdir($recDir, 0755, true);
+if ($titleChanged && file_exists("$recDir/meta.json")) write_meta($recDir, $state, $info['display']);
 
 $state['run_active']  = true;
 $state['run_started'] = $runStart;
@@ -1165,7 +1189,8 @@ function check_token_health(): void
     }
     $statusFile = "$dir/token_status.json";
     $st = file_exists($statusFile) ? (json_decode((string)file_get_contents($statusFile), true) ?: []) : [];
-    if (time() - ($st['checked'] ?? 0) < TOKEN_CHECK_INTERVAL - 5) return;
+    $needName = ($st['status'] ?? '') === 'valid' && empty($st['login']) && time() - ($st['checked'] ?? 0) >= 600; // the player needs your Twitch name: get it soon
+    if (!$needName && time() - ($st['checked'] ?? 0) < TOKEN_CHECK_INTERVAL - 5) return;
 
     $lk = fopen("$dir/.check.lock", 'c');
     if (!$lk || !flock($lk, LOCK_EX | LOCK_NB)) return; // another channel's run is checking
@@ -1941,11 +1966,13 @@ function upload_step(string $dir, array &$j, float $deadline): string
         $meta = json_decode((string)@file_get_contents("$dir/meta.json"), true) ?: [];
         $clean = fn($t) => str_replace(['<', '>'], '', (string)$t);
         $date  = substr((string)($meta['stream_started'] ?? date('Y-m-d')), 0, 10);
-        $title = $clean(($meta['channel'] ?? basename(dirname($dir))) . ' - ' . ($meta['title'] ?? 'stream') . " ($date)");
-        if (function_exists('mb_strlen') ? mb_strlen($title) > 100 : strlen($title) > 100) {
-            $title = function_exists('mb_substr') ? mb_substr($title, 0, 97) . '...' : substr($title, 0, 97) . '...';
-        }
-        $desc  = $clean("Recorded Twitch stream.\n\n" . (string)@file_get_contents("$dir/summary.txt"));
+        $mo    = apply_moments($dir); // rules may have changed since the stream: scan again now
+        $base  = $clean(($meta['channel'] ?? basename(dirname($dir))) . ' - ' . (($meta['title'] ?? '') !== '' ? $meta['title'] : 'stream') . " ($date)");
+        $title = function_exists('moments_title') ? moments_title($base, array_map($clean, $mo['labels'] ?? []))
+            : (strlen($base) > 100 ? substr($base, 0, 97) . '...' : $base);
+        if ($mo && $mo['moments']) logmsg(sprintf('YouTube moments for %s: %d found%s', basename($dir), count($mo['moments']),
+            $mo['labels'] ? ' - title gets: ' . implode(', ', $mo['labels']) : ''));
+        $desc  = $clean("Recorded Twitch stream.\n\n" . ($mo ? moments_description($mo['moments']) : '') . (string)@file_get_contents("$dir/summary.txt"));
         $desc  = function_exists('mb_strcut') ? mb_strcut($desc, 0, 4900) : substr($desc, 0, 4900);
         [$code, $h, $body] = http_full('POST',
             'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
@@ -2077,6 +2104,7 @@ function write_meta(string $recDir, array $s, string $display, array $extra = []
         // Same local time format as chat.txt, so the player can line them up.
         'video_start'    => !empty($s['video_start']) ? local_time_ms((float)$s['video_start']) : null,
         'timeline'       => $s['timeline'] ?? null, // [[video seconds, local time], ...] at each part start
+        'changes'        => $s['changes'] ?? [],    // title/category changes during the stream
         'timezone'       => date_default_timezone_get(),
     ], $extra);
     file_put_contents($f, json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
@@ -2091,11 +2119,28 @@ function embed_meta_in_chat(string $recDir): void
     $chatF = "$recDir/chat.txt";
     $meta = json_decode((string)@file_get_contents("$recDir/meta.json"), true) ?: [];
     if (!file_exists($chatF) || !$meta) return;
-    $keep = array_intersect_key($meta, array_flip(['channel', 'title', 'game', 'stream_started', 'stream_ended', 'video_start', 'timeline', 'timezone']));
+    $keep = array_intersect_key($meta, array_flip(['channel', 'title', 'game', 'stream_started', 'stream_ended', 'video_start', 'timeline', 'timezone', 'changes']));
     $chat = (string)file_get_contents($chatF);
     $chat = preg_replace('/\A#META [^\n]*\n/', '', $chat); // replace an older header
     file_put_contents("$chatF.tmp", '#META ' . json_encode($keep, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n" . $chat);
     rename("$chatF.tmp", $chatF);
+}
+
+// ---------------------------------------------------------------- YouTube "moments"
+/** Scan a recording with the dashboard's moment rules and store the result in its meta.json. */
+function apply_moments(string $dir): ?array
+{
+    if (!function_exists('moments_scan') || !is_file(MOMENTS_FILE)) return null;
+    $rules = moments_rules(MOMENTS_FILE);
+    if (!$rules) return null;
+    $res = moments_scan($dir, $rules, basename(dirname($dir)));
+    $f = "$dir/meta.json";
+    $meta = json_decode((string)@file_get_contents($f), true) ?: [];
+    $meta['moments'] = $res['moments'];
+    $meta['moment_labels'] = $res['labels'];
+    $meta['moments_checked'] = $res['checked'];
+    file_put_contents($f, json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    return $res;
 }
 
 // ---------------------------------------------------------------- streamer list (channels.json) + manager
@@ -2316,6 +2361,9 @@ function finalize(array $s, string $display, string $chanDir): void
         "Channel:          $display",
         "Title:            {$s['title']}",
         "Category:         {$s['game']}",
+        ...array_map(function ($c) {
+            return sprintf('Changed at %s:  "%s" (%s)', gmdate('H:i:s', (int)$c['video']), $c['title'], $c['game']);
+        }, $s['changes'] ?? []),
         'Started:          ' . date('Y-m-d H:i', strtotime($s['started_at'])),
         'Ended (approx):   ' . date('Y-m-d H:i'),
         'Stream length:    ' . gmdate('H:i:s', max(0, $wall)) . ' (approx.)',
@@ -2347,8 +2395,12 @@ function finalize(array $s, string $display, string $chanDir): void
 
     write_meta($recDir, $s, $display, ['stream_ended' => date('Y-m-d H:i:s'), 'recorded_seconds' => round((float)$s['seconds'])]);
     embed_meta_in_chat($recDir);
+    $mo = apply_moments($recDir);
+    if ($mo && $mo['moments']) {
+        $summary .= "\nMoments found:    " . count($mo['moments']) . ($mo['labels'] ? ' (' . implode(', ', $mo['labels']) . ')' : '');
+    }
     @file_put_contents($recDir . '/summary.txt', $summary);
     logmsg("ENDED: stream finished.\n" . $summary);
 
-    alert("$display streamed: {$s['title']}", "A stream was recorded. Decide whether to keep it:\n\n$summary");
+    alert("$display streamed: " . (($s['title'] ?? '') !== '' ? $s['title'] : '(no title)'), "A stream was recorded. Decide whether to keep it:\n\n$summary");
 }

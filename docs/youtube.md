@@ -15,6 +15,10 @@ After a stream ends and is converted, the recorder uploads it in the background 
 
 The PC uploader also works on its own, to upload a folder of videos from your PC.
 
+## Moments in title and description
+
+Optional rules on the dashboard tag uploads with what happened in the stream (a raid, a hype moment, a category), with timestamps in the description. See [dashboard.md → YouTube moments](dashboard.md#youtube-moments).
+
 ## Limits to know
 
 - **Videos are private.** Google forces videos from self-made upload apps to private until the app passes Google's compliance audit, and they can't be made public later. Fine as a private archive. For public videos you'd apply for the audit first.

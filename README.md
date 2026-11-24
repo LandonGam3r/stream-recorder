@@ -17,7 +17,7 @@ Plain PHP, no database, no framework, no build step. Upload two folders and add 
 - **Lossless MP4.** Finished streams are converted to MP4 without re-encoding, in the background, at a speed your host can handle.
 - **Web dashboard.** Switch streamers on and off, see live status, alerts, disk IO and server processes, and play or delete recordings.
 - **Player with pop-out chat.** Watch a recording with chat docked or in a separate window (second screen). Search the chat by username or text and jump to any message. Preview pictures appear when you hover the seek bar, and your own messages and mentions are highlighted. It downloads to your PC first for smooth playback, or streams.
-- **Optional YouTube upload.** Upload finished streams per streamer, resumable for files of any size.
+- **Optional YouTube upload.** Upload finished streams per streamer, resumable for files of any size. *Moments* rules scan chat and stream info (raids, hype bursts, a user's message, a category) and tag the title and description with timestamps.
 - **Optional ad-free recording.** Uses your own Twitch login where your account is ad-free (subscriptions/Turbo).
 - **Built for shared hosting.** Works within short process lifetimes, disk IO limits, memory limits and blocked ports; [details](docs/how-it-works.md).
 - **Secure by default.**
@@ -43,7 +43,7 @@ Open the address it prints, log in with the key it shows, and add a streamer. Ne
 
 ### On a web server (shared hosting with cPanel, or any Linux server)
 
-1. Upload `server/` as a folder **outside** your public web root, e.g. `/home/you/twitch-recorder/`.
+1. Upload the files in `server/` to a folder **outside** your public web root, e.g. `/home/you/twitch-recorder/`.
 2. Upload `dashboard/` into your web root under a hard-to-guess name, e.g. `public_html/rec-7f3k9q/`.
 3. Add one cron job, every minute:
    ```

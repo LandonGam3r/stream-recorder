@@ -2,6 +2,24 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.2.0] - 2026-11-24
+
+### Added
+- **YouTube moments.** Rules on the dashboard scan a recording for specific moments:
+  - **Rule types:** a chat message containing a word, a message from a user, a chat burst (at least N messages, optionally with a word, within S seconds), or the category/title containing a word.
+  - **When it runs:** right after the stream and again just before the YouTube upload, so new rules also apply to recordings waiting for upload.
+  - **What it changes:** matching labels are added to the YouTube title (`Title | Label`, shortened to fit 100 characters). The description gets a *Moments* list with timestamps, which YouTube makes clickable.
+  - **Test:** *Test on this recording* shows the resulting title and description first.
+  - **Where it's used:** the server upload and the PC uploader. Rules live in `moments.json`, the scanner in `server/moments.php`.
+- **Full log per streamer.** *Full log* (without the routine offline lines), *everything* and *download* links on each streamer card. Behind the login like everything else.
+- **Download speed cap.** Downloading a recording to your PC in the player is capped at `DOWNLOAD_LIMIT_MB` (default: 80% of `IO_LIMIT_MB`). It uses small evenly-paced pieces, so the server reads at a steady rate instead of in bursts that hit the host's IO limit.
+- **Title and category changes are kept** (`meta.json` → `changes`, and in the end-of-stream summary), and can trigger YouTube moments.
+
+### Fixed
+- **Empty stream title.** When Twitch reported an empty title/category right at the start of a stream, the recording kept that empty title (and the alert showed a blank title). Every run now takes the latest title and category, logs changes, and alerts fall back to "(no title)".
+- **Your Twitch name in the player** was only known after the next hourly token check; it's now fetched within minutes when missing.
+- The player's download no longer waits for each group of pieces before starting the next (a steady pipeline instead).
+
 ## [1.1.0] - 2026-11-24
 
 ### Added
@@ -49,5 +67,6 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.2.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/LandonGam3r/stream-recorder/releases/tag/v1.0.0

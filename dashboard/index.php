@@ -13,6 +13,7 @@ foreach ([
     'RECORDER_DIR' => '',     // '' = find it automatically (see config.example.php)
     'COOKIE_DAYS'  => 180,
     'IO_LIMIT_MB'  => 0,      // your host's disk IO limit in MB/s, drawn in the IO graph (0 = no line)
+    'DOWNLOAD_LIMIT_MB' => 'auto', // player downloads: MB/s cap. 'auto' = 80% of IO_LIMIT_MB (none without it), 0 = none
     'MAX_FAILS'    => 10,
     'FORCE_HTTPS'  => 'auto', // 'auto' = on, except for localhost / IP addresses / local names
     'TIMEZONE'     => '',     // '' = the recorder's time zone
@@ -196,7 +197,7 @@ function login_page(string $error = '', int $code = 200): void
 }
 
 if (!$authed) {
-    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers']));
+    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments']));
     if (isset($_GET['api']) || isset($_GET['io'])) { // the open dashboard noticed it's logged out: reload shows the login form
         http_response_code(401);
         header('Content-Type: application/json');
@@ -353,6 +354,7 @@ function collect(): array
             // Routine "offline" checks are left out so the interesting lines stay visible.
             'log' => array_slice(array_values(array_filter(tail_lines("$chanDir/recorder.log", 200),
                 function ($l) { return strpos($l, 'channel is offline, nothing to record') === false && strpos($l, 'Run skipped') === false; })), -25),
+            'log_size' => (int)@filesize("$chanDir/recorder.log"),
             'recordings' => array_slice($recordings, 0, 30),
             'recording_count' => count($recordings),
             'listed' => isset($list[$name]),
@@ -418,6 +420,7 @@ function collect(): array
     return [
         'now' => $now,
         'processes' => $procs,
+        'moments' => ['rules' => array_values(array_filter((array)read_json(REC_DIR . '/moments.json'), 'is_array')), 'available' => is_file(REC_DIR . '/moments.php')],
         'channels' => $channels,
         'twitch_token' => $token ? ['status' => $token['status'] ?? '?', 'detail' => $token['detail'] ?? '', 'checked' => $token['checked'] ?? null] : null,
         'youtube_accounts' => $accounts,
@@ -553,6 +556,7 @@ if (isset($_GET['play'])) {
         'channel' => (string)$_GET['ch'],
         'title' => (string)(read_json("$d/meta.json")['title'] ?? ''),
         'me'    => (string)(read_json(REC_DIR . '/secret/token_status.json')['login'] ?? ''), // your Twitch name, highlighted in chat
+        'dl_limit_mb' => DOWNLOAD_LIMIT_MB === 'auto' ? round(0.8 * (float)IO_LIMIT_MB, 1) : (float)DOWNLOAD_LIMIT_MB,
     ];
     $inject = '<script>window.PLAYER_SOURCE = ' . json_encode($src, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES) . ';</script>';
     $pos = strpos($player, '<script>');
@@ -560,6 +564,27 @@ if (isset($_GET['play'])) {
     $player = preg_replace('#</head>#', '<link rel="icon" type="image/png" href="' . FAVICON . '">' . "\n</head>", $player, 1);
     $pos = strpos($player, '<script>');
     echo $pos === false ? $player : substr($player, 0, $pos) . $inject . substr($player, $pos);
+    exit;
+}
+
+// ---------------------------------------------------------------- full log of a streamer (or the system log)
+if (isset($_GET['log'])) {
+    $ch = (string)$_GET['log'];
+    if ($ch === '_system') $f = REC_DIR . '/recordings/.system.log';
+    elseif (preg_match('/^[a-z0-9_]{1,40}$/', $ch)) $f = REC_DIR . "/recordings/$ch/recorder.log";
+    else not_found();
+    if (!is_file($f)) not_found();
+    $quiet = !empty($_GET['quiet']); // leave out the routine "offline" / "run skipped" lines
+    header('Content-Type: text/plain; charset=utf-8');
+    if (isset($_GET['dl'])) header('Content-Disposition: attachment; filename="' . ($ch === '_system' ? 'system' : $ch) . '-recorder.log"');
+    @set_time_limit(60);
+    while (ob_get_level()) ob_end_clean();
+    $h = fopen($f, 'rb');
+    while (($l = fgets($h)) !== false) {
+        if ($quiet && (strpos($l, 'channel is offline, nothing to record') !== false || strpos($l, 'Run skipped') !== false)) continue;
+        echo $l;
+    }
+    fclose($h);
     exit;
 }
 
@@ -663,6 +688,72 @@ if (isset($_GET['streamers'])) {
     exit;
 }
 
+// ---------------------------------------------------------------- YouTube moments rules (+ test on a recording)
+if (isset($_GET['moments'])) {
+    $in = check_action_request();
+    $file = REC_DIR . '/moments.json';
+    if (!is_file(REC_DIR . '/moments.php')) action_fail(409, 'moments.php is missing in the recorder folder: upload it next to record.php.');
+    require_once REC_DIR . '/moments.php';
+    $op = (string)($in['op'] ?? '');
+    $update = function (callable $fn) use ($file) {
+        $lk = fopen("$file.lock", 'c');
+        flock($lk, LOCK_EX);
+        $rules = json_decode((string)@file_get_contents($file), true);
+        if (!is_array($rules)) $rules = [];
+        $err = $fn($rules);
+        if ($err === null) {
+            if (file_put_contents("$file.tmp", json_encode(array_values($rules), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false || !rename("$file.tmp", $file)) $err = 'could not save moments.json';
+        }
+        flock($lk, LOCK_UN);
+        fclose($lk);
+        if ($err !== null) action_fail(409, $err);
+    };
+    $len = function ($s) { return function_exists('mb_strlen') ? mb_strlen($s) : strlen($s); };
+    if ($op === 'add') {
+        $r = [
+            'id' => bin2hex(random_bytes(6)), 'enabled' => true,
+            'channel' => strtolower(trim((string)($in['channel'] ?? ''))),
+            'type' => (string)($in['type'] ?? ''), 'value' => trim((string)($in['value'] ?? '')),
+            'count' => (int)($in['count'] ?? 10), 'window' => (int)($in['window'] ?? 30),
+            'label' => trim((string)($in['label'] ?? '')), 'title' => !empty($in['title']),
+        ];
+        if ($r['channel'] !== '' && !preg_match('/^[a-z0-9_]{1,40}$/', $r['channel'])) action_fail(400, 'Unknown streamer.');
+        if (!in_array($r['type'], MOMENT_TYPES, true)) action_fail(400, 'Unknown rule type.');
+        if ($r['type'] !== 'burst' && $r['value'] === '') action_fail(400, 'Fill in what to look for.');
+        if ($len($r['value']) > 100) action_fail(400, 'What to look for: at most 100 characters.');
+        if ($r['label'] === '' || $len($r['label']) > 40) action_fail(400, 'The label is 1-40 characters (it goes into the YouTube title/description).');
+        if ($r['type'] === 'burst' && ($r['count'] < 2 || $r['count'] > 1000 || $r['window'] < 5 || $r['window'] > 3600)) action_fail(400, 'Burst: 2-1000 messages within 5-3600 seconds.');
+        if ($r['type'] !== 'burst') unset($r['count'], $r['window']);
+        $update(function (array &$rules) use ($r) { if (count($rules) >= 50) return 'At most 50 rules.'; $rules[] = $r; return null; });
+    } elseif ($op === 'delete' || $op === 'toggle') {
+        $id = (string)($in['id'] ?? '');
+        $update(function (array &$rules) use ($op, $id, $in) {
+            foreach ($rules as $i => $r) {
+                if (($r['id'] ?? '') !== $id) continue;
+                if ($op === 'delete') unset($rules[$i]); else $rules[$i]['enabled'] = !empty($in['enabled']);
+                return null;
+            }
+            return 'That rule no longer exists.';
+        });
+    } elseif ($op === 'test') {
+        $d = recording_dir($in['channel'] ?? null, $in['folder'] ?? null);
+        if (!$d) action_fail(404, 'That recording no longer exists.');
+        $res = moments_scan($d, moments_rules($file), basename(dirname($d)));
+        $meta = read_json("$d/meta.json");
+        $base = ($meta['channel'] ?? basename(dirname($d))) . ' - ' . (($meta['title'] ?? '') !== '' ? $meta['title'] : 'stream')
+            . ' (' . substr((string)($meta['stream_started'] ?? ''), 0, 10) . ')';
+        echo json_encode(['ok' => true, 'count' => count($res['moments']),
+            'moments' => array_map(function ($m) { return ['clock' => moments_clock($m[0]), 't' => $m[0], 'label' => $m[1], 'detail' => $m[2]]; }, array_slice($res['moments'], 0, 200)),
+            'title' => moments_title(str_replace(['<', '>'], '', $base), $res['labels']),
+            'description' => moments_description($res['moments'])], JSON_UNESCAPED_UNICODE);
+        exit;
+    } else {
+        action_fail(400, 'Unknown action.');
+    }
+    echo json_encode(['ok' => true]);
+    exit;
+}
+
 // ---------------------------------------------------------------- delete a recording
 if (isset($_GET['delete'])) {
     header('Content-Type: application/json; charset=utf-8');
@@ -738,6 +829,27 @@ if (isset($_GET['api'])) {
   .card-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   .card-head h2 { margin: 0; font-size: 16px; }
   .acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+  .loghead { display: flex; align-items: baseline; gap: 10px; }
+  .card.moments { margin-top: 18px; }
+  .mbody { padding: 12px 16px 16px; display: grid; gap: 12px; }
+  .mhelp { margin: 0; color: var(--muted); font-size: 13px; }
+  .mrules { display: grid; gap: 6px; }
+  .mrule { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+  .mrule.off { opacity: .55; }
+  .mrule .mtxt { flex: 1; }
+  .marrow { color: var(--muted); }
+  .mform, .mtest { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+  .mform select, .mform input, .mtest select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px; }
+  .mform input[type=number] { width: 70px; }
+  .mform input:not([type]) { width: 190px; }
+  .mtest select { max-width: 520px; }
+  .mout { display: grid; gap: 6px; font-size: 13px; }
+  .mout .k { color: var(--muted); }
+  .mdesc { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; max-height: 240px; overflow: auto; }
+  .loglinks { margin-left: auto; display: flex; gap: 10px; font-size: 11px; font-weight: 500; text-transform: none; letter-spacing: 0; }
+  .loglinks a { color: var(--accent); text-decoration: none; }
+  .loglinks a:hover { text-decoration: underline; }
+  .loglinks .muted { color: var(--muted); }
   :root { --s1: #3987e5; --s2: #d95926; --s3: #199e70; }
   .card.io { margin-bottom: 18px; }
   .io-ctrl { margin-left: auto; display: flex; gap: 6px; }
@@ -889,6 +1001,7 @@ if (isset($_GET['api'])) {
     </form>
   </div>
   <div id="channels"></div>
+  <div id="momentsBox"></div>
 </main>
 <script>
 (function () {
@@ -1105,6 +1218,105 @@ if (isset($_GET['api'])) {
   }
   window.addEventListener('resize', () => { clearTimeout(window.__ioR); window.__ioR = setTimeout(renderIo, 150); });
 
+  // ---- YouTube moments
+  const MT = { text: 'Chat message contains', user: 'Message from user', burst: 'Chat burst', category: 'Category or title contains' };
+  let mUI = null;
+  function buildMoments() {
+    const card = el('div', 'card moments');
+    const head = el('div', 'card-head'); head.append(el('h2', null, 'YouTube moments'));
+    head.append(el('span', 'updated', 'scanned after each stream and right before a YouTube upload'));
+    card.append(head);
+    const body = el('div', 'mbody');
+    body.append(el('p', 'mhelp', 'When a rule finds its moment in a recording, its label is added to the YouTube title (if ticked) and the description gets a "Moments" list with clickable timestamps.'));
+    const list = el('div', 'mrules'); body.append(list);
+    // add form
+    const f = el('form', 'mform'); f.autocomplete = 'off';
+    const ch = el('select'); ch.title = 'Which streamer';
+    const ty = el('select'); Object.entries(MT).forEach(([v, t]) => { const o = el('option', null, t); o.value = v; ty.append(o); });
+    const val = el('input'); val.placeholder = 'e.g. raid'; val.maxLength = 100;
+    const cnt = el('input'); cnt.type = 'number'; cnt.min = 2; cnt.max = 1000; cnt.value = 15; cnt.title = 'messages';
+    const win = el('input'); win.type = 'number'; win.min = 5; win.max = 3600; win.value = 30; win.title = 'seconds';
+    const burst = el('span', 'mburst'); burst.append('at least ', cnt, ' messages within ', win, ' s');
+    const lab = el('input'); lab.placeholder = 'Label, e.g. RAID!'; lab.maxLength = 40;
+    const inTitle = el('input'); inTitle.type = 'checkbox'; inTitle.checked = true;
+    const tl = el('label', 'chk'); tl.append(inTitle, ' in title');
+    const add = el('button', 'act add', 'Add rule'); add.type = 'submit';
+    const err = el('span', 'del-err');
+    const upd = () => {
+      burst.style.display = ty.value === 'burst' ? '' : 'none';
+      val.placeholder = { text: 'word or phrase, e.g. raid', user: 'username', burst: 'word (optional), e.g. LUL', category: 'e.g. Just Chatting' }[ty.value];
+    };
+    ty.onchange = upd; upd();
+    f.append(ch, ty, val, burst, el('span', 'marrow', '→'), lab, tl, add, err);
+    f.onsubmit = async e => {
+      e.preventDefault(); err.textContent = '';
+      try {
+        await post('?moments=1', { op: 'add', channel: ch.value, type: ty.value, value: val.value, count: +cnt.value, window: +win.value, label: lab.value, title: inTitle.checked });
+        val.value = ''; lab.value = ''; await load();
+      } catch (x) { err.textContent = x.message; }
+    };
+    body.append(f);
+    // test
+    const tr = el('div', 'mtest');
+    const rec = el('select'); rec.title = 'Recording to test the rules on';
+    const tb = el('button', 'act', 'Test on this recording'); tb.type = 'button';
+    const out = el('div', 'mout');
+    tb.onclick = async () => {
+      out.replaceChildren(el('div', 'rec-sub', 'Scanning…'));
+      const [c, folder] = rec.value.split('/');
+      try {
+        const j = await post('?moments=1', { op: 'test', channel: c, folder });
+        out.replaceChildren();
+        out.append(el('div', 'rec-sub', j.count ? j.count + ' moment' + (j.count === 1 ? '' : 's') + ' found' : 'No moments found with the current (switched-on) rules.'));
+        const t = el('div', 'mprev'); t.append(el('span', 'k', 'YouTube title: '), el('b', null, j.title)); out.append(t);
+        if (j.description) { const pre = el('pre', 'mdesc'); pre.textContent = j.description.trim(); out.append(el('div', 'k', 'Added to the description:'), pre); }
+      } catch (x) { out.replaceChildren(el('div', 'del-err', x.message)); }
+    };
+    tr.append(rec, tb); body.append(tr, out);
+    card.append(body);
+    $('#momentsBox').append(card);
+    mUI = { list, ch, rec, card };
+  }
+  function describeRule(r) {
+    const who = r.channel ? r.channel : 'all streamers';
+    const what = r.type === 'burst'
+      ? 'at least ' + r.count + ' messages' + (r.value ? ' with "' + r.value + '"' : '') + ' within ' + r.window + ' s'
+      : MT[r.type].toLowerCase() + ' "' + r.value + '"';
+    return [who + ': ' + what, r.label + (r.title ? ' (title + description)' : ' (description)')];
+  }
+  function renderMoments(data) {
+    if (!data.moments) return;
+    if (!mUI) buildMoments();
+    if (!data.moments.available) { mUI.card.style.display = 'none'; return; }
+    mUI.card.style.display = '';
+    const a = document.activeElement;
+    // streamer + recording choices (kept as chosen)
+    if (!(a && a.closest && a.closest('#momentsBox'))) {
+      const keep1 = mUI.ch.value, keep2 = mUI.rec.value;
+      mUI.ch.replaceChildren(Object.assign(el('option', null, 'All streamers'), { value: '' }), ...data.channels.map(c => Object.assign(el('option', null, c.name), { value: c.name })));
+      mUI.ch.value = keep1;
+      const recs = [];
+      data.channels.forEach(c => c.recordings.forEach(r => { if (r.files['chat.txt'] || r.files['video.mp4']) recs.push([c.name + '/' + r.folder, c.name + ' · ' + (r.started ? r.started.slice(0, 10) : '') + ' · ' + (r.title || r.folder)]); }));
+      mUI.rec.replaceChildren(...recs.map(([v, t]) => Object.assign(el('option', null, t.length > 70 ? t.slice(0, 69) + '…' : t), { value: v })));
+      if (keep2) mUI.rec.value = keep2;
+    }
+    const sig = JSON.stringify(data.moments.rules);
+    if (mUI.sig === sig) return;
+    mUI.sig = sig;
+    mUI.list.replaceChildren();
+    if (!data.moments.rules.length) mUI.list.append(el('div', 'rec-sub', 'No rules yet - add one below.'));
+    data.moments.rules.forEach(r => {
+      const row = el('div', 'mrule' + (r.enabled ? '' : ' off'));
+      const sw = el('button', 'switch' + (r.enabled ? ' on' : '')); sw.append(el('i')); sw.title = r.enabled ? 'On - click to switch off' : 'Off - click to switch on';
+      sw.onclick = async () => { try { await post('?moments=1', { op: 'toggle', id: r.id, enabled: !r.enabled }); await load(); } catch (x) {} };
+      const [w, l] = describeRule(r);
+      const txt = el('div', 'mtxt'); txt.append(el('span', null, w), el('span', 'marrow', ' → '), el('b', null, l));
+      const del = el('button', 'act del', 'Delete');
+      del.onclick = async () => { try { await post('?moments=1', { op: 'delete', id: r.id }); await load(); } catch (x) {} };
+      row.append(sw, txt, del); mUI.list.append(row);
+    });
+  }
+
   let lastData = null, pendingDelete = null, deleteError = null, deleting = false;
   const token = document.querySelector('meta[name="dash-token"]').content;
 
@@ -1153,6 +1365,7 @@ if (isset($_GET['api'])) {
 
   function render(data) {
     lastData = data;
+    renderMoments(data);
     const now = data.now;
     const freshAlerts = renderAlerts(data.alerts, now);
     $('#updated').textContent = 'Updated ' + new Date(now * 1000).toLocaleTimeString() + ' · every 10 s';
@@ -1337,7 +1550,16 @@ if (isset($_GET['api'])) {
       });
       recs.append(table);
 
-      const log = el('div', 'section'); log.append(el('h3', null, 'Recent log'));
+      const log = el('div', 'section');
+      const lh = el('h3', 'loghead', 'Recent log');
+      if (c.log_size) {
+        const links = el('span', 'loglinks');
+        [['Full log', '&quiet=1', 'The whole log without the routine "offline" lines'], ['everything', '', 'The whole log, every line'], ['download', '&dl=1', 'Save the whole log as a file']]
+          .forEach(([t, q, tip]) => { const a = el('a', null, t); a.href = '?log=' + encodeURIComponent(c.name) + q; a.target = '_blank'; a.rel = 'noopener'; a.title = tip; links.append(a); });
+        links.append(el('span', 'muted', c.log_size < 1048576 ? Math.max(1, Math.round(c.log_size / 1024)) + ' KB' : mb(c.log_size)));
+        lh.append(links);
+      }
+      log.append(lh);
       const lg = el('div', 'log'); c.log.slice().reverse().forEach(l => lg.append(logLine(l))); log.append(lg);
       cols.append(recs, log); card.append(cols);
       box.append(card);

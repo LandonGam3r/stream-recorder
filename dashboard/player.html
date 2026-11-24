@@ -664,28 +664,45 @@
         if (have > src.size) have = 0;
         await writeText(dir, 'download-incomplete.txt', 'video.mp4 is not complete yet. Open the recording from the dashboard again to continue the download.\n');
         const t0 = performance.now(), start0 = have;
+        const limit = Math.max(0, +(src.dl_limit_mb || 0)) * 1048576; // bytes per second, 0 = no cap
+        const chunk = limit ? 2 * 1048576 : CHUNK, par = limit ? 2 : PARALLEL;
+        let paceAt = performance.now();
+        const pace = n => {   // reserve a start time synchronously, then wait for it
+          if (!limit) return Promise.resolve();
+          const now = performance.now(), at = Math.max(paceAt, now);
+          paceAt = at + n / limit * 1000;
+          return at > now ? new Promise(r => setTimeout(r, at - now)) : Promise.resolve();
+        };
         while (have < src.size) {
           const w = await fh.createWritable({ keepExistingData: true });
           await w.truncate(have);
           await w.seek(have);
           const batchEnd = Math.min(src.size, have + BATCH);
           try {
-            for (let pos = have; pos < batchEnd; ) {
-              const jobs = [];
-              for (let k = 0; k < PARALLEL && pos < batchEnd; k++, pos += CHUNK) {
-                jobs.push(fetchRange(src.video, pos, Math.min(pos + CHUNK, batchEnd) - 1, signal));
-              }
-              jobs.forEach(j => j.catch(() => {})); // a pause cancels the rest; handled below
-              for (const j of jobs) {
-                const buf = await j;
-                await w.write(buf);
-                have += buf.length;
-                const secs = (performance.now() - t0) / 1000;
-                const rate = (have - start0) / Math.max(secs, 0.5);
-                ui.busy('Downloading video…', 100 * have / src.size,
-                  gb(have) + ' of ' + gb(src.size) + ' · ' + (rate / 1048576).toFixed(1) + ' MB/s' +
-                  (rate > 0 ? ' · ~' + Math.max(1, Math.round((src.size - have) / rate / 60)) + ' min left' : ''));
-              }
+            // A steady pipeline: a few pieces in flight, written in order. With a speed cap (your host's
+            // disk IO limit, from the dashboard) the pieces are small and their start times evenly
+            // spaced, so the server reads at a constant rate instead of in bursts.
+            let next = have;
+            const queue = [];
+            const launch = async () => {
+              const s0 = next, e0 = Math.min(next + chunk, batchEnd) - 1;
+              next = e0 + 1;
+              await pace(e0 - s0 + 1);
+              const p = fetchRange(src.video, s0, e0, signal);
+              p.catch(() => {}); // a pause cancels the rest; handled below
+              return p;
+            };
+            while (have < batchEnd) {
+              while (queue.length < par && next < batchEnd) { const j = launch(); j.catch(() => {}); queue.push(j); }
+              const buf = await queue.shift();
+              await w.write(buf);
+              have += buf.length;
+              const secs = (performance.now() - t0) / 1000;
+              const rate = (have - start0) / Math.max(secs, 0.5);
+              ui.busy('Downloading video…', 100 * have / src.size,
+                gb(have) + ' of ' + gb(src.size) + ' · ' + (rate / 1048576).toFixed(1) + ' MB/s' +
+                (limit ? ' (capped at ' + (limit / 1048576).toFixed(1) + ')' : '') +
+                (rate > 0 ? ' · ~' + Math.max(1, Math.round((src.size - have) / rate / 60)) + ' min left' : ''));
             }
           } finally {
             await w.close(); // saves what has been written so far

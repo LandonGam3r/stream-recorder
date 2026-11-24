@@ -20,6 +20,11 @@ define('COOKIE_DAYS', 180);
 // graph; 0 = no line.
 define('IO_LIMIT_MB', 0);
 
+// Speed cap in MB/s when the player downloads a recording to your PC, so the download stays under
+// your host's disk IO limit instead of hitting it in bursts. 'auto' = 80% of IO_LIMIT_MB (no cap when
+// IO_LIMIT_MB is 0), 0 = no cap, or a number like 5.
+define('DOWNLOAD_LIMIT_MB', 'auto');
+
 // Wrong keys per visitor per hour before that visitor is blocked for the rest of the hour.
 define('MAX_FAILS', 10);
 

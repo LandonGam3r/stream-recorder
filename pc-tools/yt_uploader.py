@@ -294,19 +294,37 @@ def clean(text, limit):
 
 
 def metadata_for(path: Path):
-    """Title/description: from the web recorder's meta.json + summary.txt when present, else the file name."""
+    """Title/description: from the recorder's meta.json + summary.txt when present, else the file name.
+    "Moments" found by the recorder (dashboard rules) are added: labels to the title, timestamps to the description."""
     meta = load_json(path.parent / "meta.json", {})
     if meta.get("title") or meta.get("channel"):
         date = (meta.get("stream_started") or "")[:10]
-        title = f"{meta.get('channel', '')} - {meta.get('title', 'stream')}" + (f" ({date})" if date else "")
+        title = f"{meta.get('channel', '')} - {meta.get('title') or 'stream'}" + (f" ({date})" if date else "")
     else:
         title = path.stem
-    desc = ""
-    if (path.parent / "summary.txt").exists():
-        desc = "Recorded Twitch stream.\n\n" + (path.parent / "summary.txt").read_text(encoding="utf-8", errors="replace")
     title = clean(title, 300)
-    if len(title) > 100:
-        title = title[:97] + "..."
+    labels = [clean(str(l), 60) for l in (meta.get("moment_labels") or [])]
+    suffix = (" | " + " | ".join(labels)) if labels else ""
+    if len(suffix) > 60:
+        suffix = suffix[:59] + "…"
+    room = 100 - len(suffix)
+    if len(title) > room:
+        title = title[:room - 1] + "…"
+    title += suffix
+    desc = ""
+    moments = meta.get("moments") or []
+    if moments:
+        lines = ["Moments:"]
+        for t, label, detail in moments[:60]:
+            t = int(round(float(t)))
+            lines.append(f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d} {label}" + (f" ({detail})" if detail else ""))
+        if len(moments) > 60:
+            lines.append(f"… and {len(moments) - 60} more")
+        desc += "\n".join(lines) + "\n\n"
+    if (path.parent / "summary.txt").exists():
+        desc = "Recorded Twitch stream.\n\n" + desc + (path.parent / "summary.txt").read_text(encoding="utf-8", errors="replace")
+    elif desc:
+        desc = "Recorded Twitch stream.\n\n" + desc
     return title, clean(desc, 4900)
 
 

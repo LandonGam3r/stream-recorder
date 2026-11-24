@@ -8,6 +8,8 @@ server/secret/
 server/bin/
 server/channels.json
 server/channels.json.*
+server/moments.json
+server/moments.json.*
 server/*.log
 server/cron_output.txt
 server/last_run.txt

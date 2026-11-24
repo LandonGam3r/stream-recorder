@@ -61,7 +61,9 @@ The playback session is reused between runs (~20 min), so to Twitch it looks lik
 ```
 server/
   record.php, config.php
+  moments.php                YouTube moments scanner (used by record.php and the dashboard)
   channels.json              streamer list (the dashboard edits it)
+  moments.json               YouTube moments rules (the dashboard edits them)
   recordings/
     .notifications.json      alerts
     .io_history.json         IO graph data (24 h, per minute)
@@ -71,7 +73,7 @@ server/
       2026-11-17_150000_<streamid>/
         video.mp4            after conversion (parts/NNN.ts while recording)
         chat.txt             chat, first line = sync info
-        meta.json            title, times, timeline, YouTube link
+        meta.json            title, times, timeline, title/category changes, moments, YouTube link
         summary.txt          end-of-stream summary
   secret/                    dashboard key, encrypted tokens (never web-reachable)
   last_run.txt, cron_output.txt

@@ -2,7 +2,7 @@
 
 Everything works without configuration. To change a setting, copy the example file to `config.php` in the same folder and edit it; anything you leave out keeps its default. `config.php` is never part of an update, so your settings survive.
 
-Streamers and their per-streamer settings (on/off, YouTube account, Twitch login) are **not** in a config file: you manage them on the dashboard, which stores them in `server/channels.json`.
+Streamers and their per-streamer settings (on/off, YouTube account, Twitch login) are **not** in a config file: you manage them on the dashboard, which stores them in `server/channels.json`. The same goes for YouTube moments rules (`server/moments.json`).
 
 ## Recorder: `server/config.php`
 
@@ -43,6 +43,7 @@ Copy `dashboard/config.example.php` (next to `index.php`).
 | `RECORDER_DIR` | `''` | The folder with `record.php`. `''` = automatic: the `RECORDER_DIR` environment variable, `../server`, or `twitch-recorder` / `stream-recorder` two levels up. |
 | `COOKIE_DAYS` | `180` | How long a browser stays logged in. |
 | `IO_LIMIT_MB` | `0` | Your host's IO limit in MB/s, drawn in the IO graph (`0` = no line). |
+| `DOWNLOAD_LIMIT_MB` | `'auto'` | Speed cap when the player downloads a recording to your PC. `'auto'` = 80% of `IO_LIMIT_MB` (no cap when that's 0), `0` = no cap, or a number. |
 | `MAX_FAILS` | `10` | Wrong keys per visitor per hour before that visitor is blocked for the hour. |
 | `FORCE_HTTPS` | `'auto'` | Redirect to HTTPS and send HSTS. `'auto'` = for real domain names, not for localhost, IP addresses or local names. `true`/`false` = always/never. |
 | `TIMEZONE` | `''` | Time zone for the dashboard. `''` = the recorder's (it reports it in `recordings/.settings.json`). |
