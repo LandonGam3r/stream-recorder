@@ -2,6 +2,14 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Manual YouTube upload.** A *YouTube* button next to each finished recording uploads it to a chosen account, for streams recorded while the automatic upload was off. Same queue, title, description and moments as the automatic upload; waits for the MP4 conversion when one is pending. *Cancel upload* takes a queued upload out again; *Upload again* for recordings already on YouTube.
+
+### Changed
+- A queued upload that hasn't started yet shows as *upload queued* instead of *uploading 0%*.
+
 ## [1.2.0] - 2026-11-24
 
 ### Added
@@ -67,6 +75,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[Unreleased]: https://github.com/LandonGam3r/stream-recorder/compare/v1.2.0...HEAD
 [1.2.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/LandonGam3r/stream-recorder/releases/tag/v1.0.0

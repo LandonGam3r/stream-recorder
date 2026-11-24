@@ -71,6 +71,11 @@ Each recording shows its title, date, length, files, size and status. Running co
   - **Stream from the server**: plays right away, but can stutter on long or high-quality streams.
   - Other browsers get plain download links.
 - **Logs:** the *Recent log* box shows the last lines. *Full log* opens the whole log in a new tab, without the routine "offline" lines; *everything* includes them, and *download* saves it as a file.
+- **YouTube** uploads a finished recording by hand, for example when the streamer's upload setting was off. Pick the account and press *Upload*:
+  - It goes in the same queue as the automatic upload, with the same title, description and moments. It starts at the next cron run while nothing records.
+  - A recording still waiting for its MP4 conversion is uploaded right after the conversion.
+  - *Cancel upload* takes it out of the queue again. *Upload again* appears for a recording that's already on YouTube.
+  - For a stream that's still being recorded, set the account in the streamer's settings instead: it's uploaded when the stream ends.
 - **Delete** asks for confirmation, then removes the whole recording folder. It's not possible while that stream is still recording or converting.
 
 ![Player](images/player.png)

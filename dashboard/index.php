@@ -197,7 +197,7 @@ function login_page(string $error = '', int $code = 200): void
 }
 
 if (!$authed) {
-    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments']));
+    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload']));
     if (isset($_GET['api']) || isset($_GET['io'])) { // the open dashboard noticed it's logged out: reload shows the login form
         http_response_code(401);
         header('Content-Type: application/json');
@@ -314,13 +314,15 @@ function collect(): array
                     'pct'     => $total > 0 ? min(100, round(100 * $done / $total, 1)) : null,
                     'eta_min' => ($running && $done > 0 && $total > $done) ? round($elapsed * ($total - $done) / $done / 60) : null,
                     'attempt' => (int)($cj['tries'] ?? 0),
+                    'youtube' => $cj['youtube'] ?? null,
                 ];
                 if (!$running) $status = 'convert queued';
             }
             if (isset($uploadQ[$d])) {
                 $u = $uploadQ[$d];
-                $status = $u['error'] ? 'upload waiting' : 'uploading';
-                $progress = ['offset' => $u['offset'], 'size' => $u['size'], 'error' => $u['error'], 'account' => $u['account']];
+                $status = $u['error'] ? 'upload waiting' : (!empty($u['session']) ? 'uploading' : 'upload queued');
+                $progress = ['offset' => $u['offset'], 'size' => $u['size'], 'error' => $u['error'], 'account' => $u['account'],
+                    'started' => !empty($u['session'])];
             }
             $recordings[] = [
                 'folder' => basename($d), 'title' => $meta['title'] ?? '', 'started' => $meta['stream_started'] ?? null,
@@ -786,6 +788,82 @@ if (isset($_GET['delete'])) {
     exit;
 }
 
+// ---------------------------------------------------------------- manual YouTube upload
+// Puts a finished recording in the same upload queue the automatic upload uses; the next cron run
+// (when nothing is recording) uploads it. op 'cancel' takes it out again.
+if (isset($_GET['upload'])) {
+    $in = check_action_request();
+    $op = (string)($in['op'] ?? 'queue');
+    $d = recording_dir($in['channel'] ?? null, $in['folder'] ?? null);
+    if (!$d) action_fail(404, 'That recording no longer exists.');
+    $chanDir = dirname($d);
+    // Same path form record.php uses for its queue keys; also match the real path.
+    $key  = REC_DIR . '/recordings/' . basename($chanDir) . '/' . basename($d);
+    $keys = array_unique([$key, $d]);
+    $qFile = REC_DIR . '/recordings/.upload_queue.json';
+    $logLine = function (string $msg) use ($chanDir) {
+        @file_put_contents("$chanDir/recorder.log", '[' . date('Y-m-d H:i:s') . "] $msg\n", FILE_APPEND | LOCK_EX);
+    };
+
+    if ($op === 'cancel') {
+        $found = false;
+        dash_queue_update('upload', function (array &$q) use ($keys, &$found) {
+            foreach ($keys as $k) if (isset($q[$k])) { unset($q[$k]); $found = true; }
+        });
+        dash_queue_update('convert', function (array &$q) use ($keys, &$found) {
+            foreach ($keys as $k) if (!empty($q[$k]['youtube'])) { $q[$k]['youtube'] = null; $found = true; }
+        });
+        if (!$found) action_fail(409, 'This recording is not waiting for an upload.');
+        $logLine('YouTube upload cancelled via the dashboard: ' . basename($d)
+            . '');
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op !== 'queue') action_fail(400, 'Unknown action');
+
+    $acct = strtolower(preg_replace('/[^a-zA-Z0-9_-]/', '', (string)($in['account'] ?? '')));
+    if ($acct === '' || !is_file(REC_DIR . "/secret/youtube_$acct.enc")) {
+        action_fail(409, $acct === '' ? 'Choose a YouTube account.' : "YouTube account '$acct' is not set up (see docs/youtube.md).");
+    }
+    $st = read_json("$chanDir/state.json");
+    if (!empty($st['stream_id']) && ($st['dir'] ?? '') === basename($d)) {
+        action_fail(409, 'This stream is still being recorded. Pick a YouTube account in the streamer\'s settings '
+            . 'and it is uploaded automatically when the stream ends.');
+    }
+    $parts = glob("$d/parts/*.ts") ?: [];
+    if (!is_file("$d/video.mp4") && !is_file("$d/video.ts") && !$parts) action_fail(409, 'This recording has no video.');
+    $uploadQ = read_json($qFile);
+    foreach ($keys as $k) if (isset($uploadQ[$k])) action_fail(409, 'This recording is already waiting for an upload.');
+
+    // Still in the MP4 conversion queue: upload once that is done (as the automatic upload does).
+    $convertQ = read_json(REC_DIR . '/recordings/.convert_queue.json');
+    $inConvert = null;
+    foreach ($keys as $k) if (isset($convertQ[$k])) $inConvert = $k;
+    if ($inConvert !== null) {
+        dash_queue_update('convert', function (array &$q) use ($inConvert, $acct) {
+            if (isset($q[$inConvert])) $q[$inConvert]['youtube'] = $acct;
+        });
+        $logLine("YouTube upload to '$acct' requested via the dashboard: " . basename($d) . ' (after the MP4 conversion)');
+        echo json_encode(['ok' => true, 'after_convert' => true]);
+        exit;
+    }
+    if (!is_file("$d/video.mp4") && !is_file("$d/video.ts")) {
+        action_fail(409, 'The video is still in parts and not queued for conversion. Put an empty convert-again.txt in the folder first.');
+    }
+    if (!is_file($qFile)) @file_put_contents($qFile, '{}');
+    $added = false;
+    dash_queue_update('upload', function (array &$q) use ($key, $acct, &$added) {
+        if (isset($q[$key])) return;
+        $q[$key] = ['account' => $acct, 'tries' => 0, 'session' => null, 'offset' => 0, 'size' => 0, 'file' => null,
+            'queued' => time(), 'not_before' => 0, 'error' => null, 'manual' => true];
+        $added = true;
+    });
+    if (!$added) action_fail(409, 'This recording is already waiting for an upload.');
+    $logLine("YouTube upload to '$acct' requested via the dashboard: " . basename($d));
+    echo json_encode(['ok' => true]);
+    exit;
+}
+
 if (isset($_GET['api'])) {
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(collect(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -946,6 +1024,9 @@ if (isset($_GET['api'])) {
   .p-recording { color: var(--live); background: rgba(255,77,90,.12); }
   .p-converting, .p-uploading { color: var(--accent); background: rgba(143,124,255,.14); }
   .p-upload-waiting { color: var(--warn); background: rgba(242,184,75,.13); }
+  .p-upload-queued { color: var(--accent); background: rgba(143,124,255,.08); }
+  tr.confirm.yt td { background: rgba(143,124,255,.07); }
+  tr.confirm select { margin: 0 6px; }
   .bar { height: 4px; background: #262a33; border-radius: 4px; margin-top: 5px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: var(--accent); }
   a { color: #b3a8ff; }
@@ -1318,6 +1399,7 @@ if (isset($_GET['api'])) {
   }
 
   let lastData = null, pendingDelete = null, deleteError = null, deleting = false;
+  let pendingYt = null, ytError = null, ytBusy = false, ytCancelErr = null;
   const token = document.querySelector('meta[name="dash-token"]').content;
 
   async function post(url, body) {
@@ -1348,6 +1430,19 @@ if (isset($_GET['api'])) {
       await load();
     } catch (err) { $('#addErr').textContent = err.message; }
   });
+
+  async function ytAction(body, key) {
+    ytBusy = true; ytError = null; ytCancelErr = null; pendingYt = body.op === 'queue' ? key : null; render(lastData);
+    try {
+      await post('?upload=1', body);
+      pendingYt = null;
+    } catch (e) {
+      ytError = e.message;
+      if (body.op === 'cancel') { ytCancelErr = { key, msg: e.message }; pendingYt = null; }
+    }
+    ytBusy = false;
+    await load();
+  }
 
   async function doDelete(channel, folder) {
     deleting = true; deleteError = null; render(lastData);
@@ -1512,11 +1607,12 @@ if (isset($_GET['api'])) {
           a.append(el('div', 'rec-sub', 'MP4 conversion: ' + (c.state === 'running'
             ? (c.pct != null ? c.pct.toFixed(0) + '%' : 'running') + (c.eta_min != null ? ' · ~' + c.eta_min + ' min left' : '') + (c.attempt > 1 ? ' · attempt ' + c.attempt : '')
             : c.state)));
+          if (c.youtube) a.append(el('div', 'rec-sub', 'Then uploaded to YouTube (' + c.youtube + ')'));
         }
         if (r.upload) {
           const pct = r.upload.size ? Math.floor(100 * r.upload.offset / r.upload.size) : 0;
-          const bar = el('div', 'bar'); const i = el('i'); i.style.width = pct + '%'; bar.append(i); a.append(bar);
-          a.append(el('div', 'rec-sub', 'YouTube (' + r.upload.account + '): ' + pct + '%' + (r.upload.error ? ' · ' + r.upload.error : '')));
+          if (r.upload.started || r.upload.error) { const bar = el('div', 'bar'); const i = el('i'); i.style.width = pct + '%'; bar.append(i); a.append(bar); }
+          a.append(el('div', 'rec-sub', 'YouTube (' + r.upload.account + '): ' + (r.upload.started || r.upload.error ? pct + '%' : 'queued, starts at the next cron run when nothing is recording') + (r.upload.error ? ' · ' + r.upload.error : '')));
         }
         if (r.youtube) { const l = el('a', null, 'YouTube (' + r.youtube.privacy + ')'); l.href = r.youtube.url; l.target = '_blank'; l.rel = 'noopener noreferrer'; const d = el('div', 'rec-sub'); d.append(l); a.append(d); }
         b.append(el('span', 'pill p-' + r.status.replace(' ', '-'), r.status)); b.append(el('div', 'rec-sub', mb(r.size)));
@@ -1529,12 +1625,41 @@ if (isset($_GET['api'])) {
           pl.title = 'Watch with chat in a new tab';
           acts.append(pl);
         }
+        const queuedYt = r.upload || (r.convert && r.convert.youtube);
+        if (queuedYt) {
+          const cu = el('button', 'act', 'Cancel upload');
+          cu.title = 'Take this recording out of the YouTube upload queue';
+          cu.onclick = () => ytAction({ op: 'cancel', channel: c.name, folder: r.folder }, key);
+          acts.append(cu);
+          if (ytCancelErr && ytCancelErr.key === key) a.append(el('div', 'del-err', ytCancelErr.msg));
+        } else if (!queuedYt && data.youtube_accounts.length && r.status !== 'recording' && r.status !== 'interrupted' && Object.keys(r.files).some(f => f.startsWith('video'))) {
+          const yb = el('button', 'act', r.youtube ? 'Upload again' : 'YouTube');
+          yb.title = r.youtube ? 'Already on YouTube - upload it once more' : 'Upload this recording to YouTube';
+          yb.onclick = () => { pendingYt = key; ytError = null; pendingDelete = null; render(lastData); };
+          acts.append(yb);
+        }
         const del = el('button', 'act del', 'Delete');
         if (r.busy) { del.disabled = true; del.title = "Can't delete now: " + r.busy; }
-        else del.onclick = () => { pendingDelete = key; deleteError = null; render(lastData); };
+        else del.onclick = () => { pendingDelete = key; deleteError = null; pendingYt = null; render(lastData); };
         acts.append(del);
         b.append(acts);
         tr.append(a, b); table.append(tr);
+        if (pendingYt === key) {
+          const ctr = el('tr', 'confirm yt'); const td = el('td'); td.colSpan = 2;
+          td.append(el('span', null, (r.youtube ? 'Already on YouTube (' + r.youtube.account + '). Upload "' : 'Upload "') + (r.title || r.folder) + '" to'));
+          const sel = el('select');
+          data.youtube_accounts.forEach(acc => { const o = el('option', null, acc.name + (acc.error ? ' (problem)' : '')); o.value = acc.name; sel.append(o); });
+          sel.value = data.youtube_accounts.some(acc => acc.name === c.youtube) ? c.youtube : data.youtube_accounts[0].name;
+          const go = el('button', 'act play', ytBusy ? 'Queuing…' : 'Upload');
+          go.disabled = ytBusy;
+          go.onclick = () => ytAction({ op: 'queue', channel: c.name, folder: r.folder, account: sel.value }, key);
+          const no = el('button', 'act', 'Cancel');
+          no.onclick = () => { pendingYt = null; ytError = null; render(lastData); };
+          td.append(sel, go, no);
+          td.append(el('div', 'rec-sub', 'Same title, description and moments as the automatic upload. It starts at the next cron run when nothing is recording' + (r.convert ? ', after the MP4 conversion' : '') + '.'));
+          if (ytError) td.append(el('div', 'del-err', ytError));
+          ctr.append(td); table.append(ctr);
+        }
         if (pendingDelete === key) {
           const ctr = el('tr', 'confirm'); const td = el('td'); td.colSpan = 2;
           td.append(el('span', null, 'Delete "' + (r.title || r.folder) + '" (' + mb(r.size) + ')? Video, chat and everything else in this folder will be gone for good. '));

@@ -13,6 +13,8 @@ You need your own small "app" at Google once. It's free, and it's what allows up
 
 After a stream ends and is converted, the recorder uploads it in the background (`UPLOAD_BUDGET` seconds per run, only while nothing records by default). Alerts show the link when it's done, or any problem (expired sign-in, daily limit); it retries by itself. The recording stays where it is.
 
+Forgot to switch it on? Use the **YouTube** button next to a recording on the dashboard to upload it afterwards (see [dashboard.md → Recordings](dashboard.md#recordings)).
+
 The PC uploader also works on its own, to upload a folder of videos from your PC.
 
 ## Moments in title and description
