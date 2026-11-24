@@ -4,6 +4,13 @@
 
 <h1 align="center">Stream Recorder™</h1>
 
+<p align="center">
+  <a href="https://github.com/LandonGam3r/stream-recorder/releases/latest"><img src="https://img.shields.io/github/v/release/LandonGam3r/stream-recorder?label=version&color=8f7cff" alt="Latest version"></a>
+  <a href="https://github.com/LandonGam3r/stream-recorder/actions/workflows/check.yml"><img src="https://img.shields.io/github/actions/workflow/status/LandonGam3r/stream-recorder/check.yml?label=checks" alt="Checks"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/LandonGam3r/stream-recorder?color=3ccf91" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/PHP-8.0%2B-777bb4" alt="PHP 8.0+">
+</p>
+
 <p align="center"><b>Automatically record Twitch streams — video and chat — on a cheap shared web host or your own computer, and manage everything from one web dashboard.</b></p>
 
 Plain PHP, no database, no framework, no build step. Upload two folders and add one cron line, or run one script locally.
