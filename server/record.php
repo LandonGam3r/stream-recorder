@@ -370,6 +370,11 @@ while (true) {
     if (microtime(true) >= $nextEnabledCheck) {
         $nextEnabledCheck = microtime(true) + 3;
         if (!channel_enabled($channel)) { $exitReason = 'switched off on the dashboard'; $switchedOff = true; break; }
+        if (recheck_ad_free($channel)) {
+            // Became ad-free mid-stream (e.g. you just subscribed): continue with your account.
+            $u = get_media_playlist_url($channel, $qualityName, true);
+            if ($u) { $playlistUrl = $u; $newPart = true; logmsg('Switched to your account (ad-free) for the rest of the stream'); }
+        }
     }
     if (MAX_RUNTIME > 0) {
         if ($elapsed >= MIN_RUNTIME && file_exists($handoverFile)) { $exitReason = 'handed over'; break; }
@@ -638,6 +643,72 @@ function auth_decision(): ?array
     return (is_array($d) && time() - ($d['checked'] ?? 0) < 43200) ? $d : null;
 }
 
+/**
+ * Auto mode: decides from Twitch's playback token whether your account is ad-free on this channel,
+ * stores the decision (.auth_decision.json, also shown on the dashboard) and logs why.
+ * A direct subscription check is logged next to it, so a mismatch is visible.
+ */
+function decide_ad_free(string $login, array $tok): bool
+{
+    $v = json_decode((string)($tok['value'] ?? ''), true) ?: [];
+    $uid = $v['user_id'] ?? null;
+    $adFree = !empty($uid) && (isset($v['show_ads']) ? !$v['show_ads'] : (!empty($v['subscriber']) || !empty($v['turbo'])));
+    $sub = subscription_check($login);
+    $file = dirname($GLOBALS['stateFile']) . '/.auth_decision.json';
+    $prev = json_decode((string)@file_get_contents($file), true);
+    file_put_contents($file, json_encode([
+        'ad_free' => $adFree, 'user_id' => $uid, 'subscriber' => $v['subscriber'] ?? null, 'turbo' => $v['turbo'] ?? null,
+        'show_ads' => $v['show_ads'] ?? null, 'subscribed' => $sub['subscribed'], 'tier' => $sub['tier'], 'prime' => $sub['prime'],
+        'checked' => time(),
+    ]));
+    $subText = $sub['subscribed'] === null ? 'unknown'
+        : ($sub['subscribed'] ? 'subscribed' . ($sub['tier'] ? ' (tier ' . intdiv((int)$sub['tier'], 1000) . ($sub['prime'] ? ', Prime' : '') . ')' : '') : 'not subscribed');
+    $first = !is_array($prev);
+    if (!$first && (bool)$prev['ad_free'] === $adFree && !DEBUG) return $adFree; // re-check, nothing changed
+    if ($adFree) {
+        logmsg(sprintf('Auto: your account is ad-free on this channel (subscriber=%s turbo=%s, direct check: %s) - using your token%s',
+            json_encode($v['subscriber'] ?? null), json_encode($v['turbo'] ?? null), $subText, $first ? ' for this stream' : ' from now on'));
+    } elseif (empty($uid)) {
+        logmsg('Auto: Twitch did not recognise your login for this request (no user id in its answer) - recording anonymously. Check the Twitch token on the dashboard.');
+    } else {
+        logmsg(sprintf('Auto: Twitch shows your account (user id %s) ads on this channel: subscriber=%s turbo=%s show_ads=%s; direct check: %s%s - recording anonymously, checking again every 30 min',
+            $uid, json_encode($v['subscriber'] ?? null), json_encode($v['turbo'] ?? null), json_encode($v['show_ads'] ?? null), $subText,
+            $sub['subscribed'] ? ' (so Twitch still marks this subscribed account for ads)' : ''));
+    }
+    return $adFree;
+}
+
+/** Are you subscribed to this channel? ['subscribed' => true|false|null (unknown), 'tier' => '1000'|null, 'prime' => bool] */
+function subscription_check(string $login): array
+{
+    $d = gql('query($login: String!) { user(login: $login) { self { subscriptionBenefit { tier purchasedWithPrime } } } }', ['login' => $login], true);
+    if (!is_array($d) || !isset($d['user']) || !is_array($d['user']) || !array_key_exists('self', $d['user']) || $d['user']['self'] === null) {
+        return ['subscribed' => null, 'tier' => null, 'prime' => false];
+    }
+    $b = $d['user']['self']['subscriptionBenefit'] ?? null;
+    return ['subscribed' => $b !== null, 'tier' => $b['tier'] ?? null, 'prime' => !empty($b['purchasedWithPrime'])];
+}
+
+/**
+ * Auto mode, during a stream: re-check a "gets ads" decision every 30 minutes (a subscription can
+ * start mid-stream). Only asks Twitch for a token, doesn't touch the running video. true = now ad-free.
+ */
+function recheck_ad_free(string $login): bool
+{
+    if (twitch_auth_mode() !== 'auto' || oauth_token() === '') return false;
+    $d = auth_decision();
+    if ($d === null || !empty($d['ad_free']) || time() - (int)($d['checked'] ?? 0) < 1800) return false;
+    $r = gql('query($login: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: "web", playerBackend: "mediaplayer", playerType: "embed"}) { value signature } }',
+        ['login' => $login], true);
+    $tok = $r['streamPlaybackAccessToken'] ?? null;
+    if (!$tok) { // couldn't ask: try again later
+        $d['checked'] = time();
+        @file_put_contents(dirname($GLOBALS['stateFile']) . '/.auth_decision.json', json_encode($d));
+        return false;
+    }
+    return decide_ad_free($login, $tok);
+}
+
 /** Use the token for this request? (auto mode: only while the account is ad-free here) */
 function want_twitch_auth(): bool
 {
@@ -673,16 +744,7 @@ function get_media_playlist_url(string $login, string &$chosen = '', bool $fresh
         $tok = $d['streamPlaybackAccessToken'] ?? null;
         if ($tok && twitch_auth_mode() === 'auto' && auth_decision() === null) {
             // Twitch's answer says whether this account gets ads here - no extra request needed.
-            $v = json_decode($tok['value'], true) ?: [];
-            $adFree = isset($v['show_ads']) ? !$v['show_ads'] : (!empty($v['subscriber']) || !empty($v['turbo']));
-            file_put_contents(dirname($GLOBALS['stateFile']) . '/.auth_decision.json', json_encode([
-                'ad_free' => $adFree, 'subscriber' => $v['subscriber'] ?? null, 'turbo' => $v['turbo'] ?? null, 'checked' => time(),
-            ]));
-            if ($adFree) {
-                logmsg('Auto: your account is ad-free on this channel - using your token for this stream');
-            } else {
-                logmsg('Auto: your account gets ads on this channel (subscriber=' . json_encode($v['subscriber'] ?? null)
-                    . ') - recording anonymously for this stream, your token is not used');
+            if (!decide_ad_free($login, $tok)) {
                 $tok = null; // fall through to an anonymous token below
                 $declined = true;
             }
@@ -1124,6 +1186,8 @@ function check_token_health(): void
             $status  = 'valid';
             $expires = (int)($v['expires_in'] ?? 0);
             $detail  = 'logged in as ' . ($v['login'] ?? '?');
+            $st['login'] = (string)($v['login'] ?? '');
+            $st['user_id'] = (string)($v['user_id'] ?? '');
         } elseif ($code === 401) {
             $status = 'invalid';
             $detail = 'Twitch rejected the token (logged out, password changed, or expired)';
@@ -1136,6 +1200,7 @@ function check_token_health(): void
             } elseif (!empty($d['currentUser']['login'])) {
                 $status = 'valid';
                 $detail = 'logged in as ' . $d['currentUser']['login'];
+                $st['login'] = (string)$d['currentUser']['login'];
             }
         }
     }

@@ -33,7 +33,7 @@ Start with the dashboard: the **Cron** chip, the **Alerts**, and each streamer's
 | `Took over recording (waited Ns)` | Normal handover between runs. |
 | `GAP: missed N segment(s)` | Video was lost: a run started too late or Twitch didn't deliver. |
 | `WARNING: previous run did not exit cleanly` | The host killed a run (it's counted under *Cron runs → killed*). |
-| `Auto: ...` | Whether your Twitch login is used for this stream (see [twitch-token.md](twitch-token.md)). |
+| `Auto: ...` | Whether your Twitch login is used for this stream, and why. The table in [twitch-token.md](twitch-token.md#why-isnt-my-account-used-on-a-channel-im-subscribed-to) explains each case. |
 | `MP4 conversion: NOT available - ...` | No ffmpeg: see the reason, and [install-webserver.md](install-webserver.md#3-ffmpeg-for-mp4). |
 | `Not enough disk space to convert` | Free some space; it retries every 30 minutes. |
 | `ffmpeg is gone ... without reporting back` | ffmpeg's watcher was stopped; the result is checked anyway and kept if complete. |

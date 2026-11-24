@@ -74,4 +74,19 @@ Each recording shows its title, date, length, files, size and status. Running co
 
 ![Player](images/player.png)
 
-The player: click a chat timestamp to jump there; *Chat sync ±* nudges chat if it feels early or late; **Pop out chat** opens it in its own window for a second screen. Keys: Space, ←/→, F (fullscreen), C (chat window).
+### The player
+
+- **Seek bar:** hover it for a preview picture and the time; click or drag to jump. Previews are made in your browser from the video file, for recordings on your PC or downloaded through *Play*. When streaming from the server you see only the time, so no extra video is pulled from your host.
+- **Chat search:** type in the bar above the chat to see every message from a user (switch to *Message* to search the text instead). Usernames autocomplete.
+  - Click a result to jump to that moment.
+  - Hits are also shown as yellow ticks on the seek bar.
+  - **Me** shows your own messages. Clear the box (or press Escape) to get the live chat back.
+
+![Chat search](images/chat-search.png)
+
+- **Your name:** your own messages get a purple marker, and messages that mention you get a yellow one.
+  - Opened from the dashboard, the player knows your name from the Twitch token.
+  - Otherwise set it with ⚙ in the chat bar (remembered per browser).
+- **Chat sync ±** nudges chat if it feels early or late. Click a chat timestamp to jump there.
+- **Pop out chat** opens chat in its own window for a second screen, with the same search.
+- **Keys:** Space or K (play/pause), ←/→ (5 s), M (mute), F (fullscreen, also double-click), C (chat window).

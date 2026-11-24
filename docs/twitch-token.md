@@ -18,9 +18,22 @@ The next run encrypts it into `secret/token.enc` with your `REC_KEY` and deletes
 ## Per streamer
 
 The dashboard's *Your Twitch login* setting:
-- **Auto** (default): at the start of each stream, the recorder reads from Twitch's playback answer whether your account is ad-free on that channel. There's no extra request for this. Ad-free: it uses your token. Not ad-free: that stream is recorded anonymously, so your account isn't involved where it doesn't help.
+- **Auto** (default): at the start of each stream, the recorder reads from Twitch's playback answer whether your account is ad-free on that channel.
+  - **Ad-free:** it uses your token.
+  - **Not ad-free:** the stream is recorded anonymously, so your account isn't involved where it doesn't help. It checks again every 30 minutes, so subscribing mid-stream switches the recording to your account for the rest of the stream, without interrupting it.
 - **Always**: always use the token.
 - **Never**: never use it for this streamer.
+
+## Why isn't my account used on a channel I'm subscribed to?
+
+The log line starting with `Auto:` at the start of the stream (and the streamer card's *Watching as*) tells you what Twitch reported:
+
+| Log says | Meaning | What to do |
+|---|---|---|
+| `Twitch shows your account (user id N) ads … direct check: not subscribed` | Twitch doesn't see a subscription on **this** account. | Check that the token is from the account you're subscribed with (header chip → hover: "logged in as …"). Gifted and Prime subs count; an expired sub doesn't. |
+| `… direct check: subscribed (tier 1, Prime) (so Twitch still marks this subscribed account for ads)` | You are subscribed, but Twitch still serves your account ads on this channel. | Nothing the recorder can change. Set *Your Twitch login* to *Never* for this streamer to keep your account out of it. |
+| `Twitch did not recognise your login for this request` | The token didn't log in. | Check the Twitch token chip in the header; set up a new token if it's not working. |
+| `your account is ad-free on this channel` | Working as intended. | None. |
 
 ## Health checks
 

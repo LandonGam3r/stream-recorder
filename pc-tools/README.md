@@ -10,10 +10,13 @@ Plays a recording with its chat in sync - chat in a separate pop-up window you c
 3. **Pop out chat** opens the chat window. If the browser blocks it, allow pop-ups for the page and click again. Closing the pop-up puts chat back next to the video.
 
 Extras:
+- Hover the seek bar for a preview picture of that moment.
+- Search the chat by username (or switch to *Message* for the text). Click a result to jump there; hits also show as ticks on the seek bar.
+- Set your Twitch name with ⚙ in the chat bar: your messages and mentions of you are highlighted, and **Me** lists your messages.
 - Click a chat timestamp to jump to that moment.
 - **Chat sync −/+** nudges chat if it feels early or late (remembered per recording).
 - A−/A+ in the pop-up changes the text size.
-- Keys: Space = play/pause, ←/→ = 5 s, F = fullscreen, C = pop out/dock chat.
+- Keys: Space/K = play/pause, ←/→ = 5 s, M = mute, F = fullscreen (or double-click), C = pop out/dock chat.
 
 Nothing is uploaded anywhere - the files are only read by your browser. `.ts` files can't play in browsers; recordings converted by the server are `.mp4`.
 

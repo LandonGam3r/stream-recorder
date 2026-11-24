@@ -343,7 +343,11 @@ function collect(): array
             'viewer' => (function ($f) {
                 $d = json_decode((string)@file_get_contents($f), true);
                 if (!is_array($d)) return null;
-                return !empty($d['ad_free']) ? 'Your account (ad-free)' : 'Anonymous (your account gets ads here)';
+                if (!empty($d['ad_free'])) return 'Your account (ad-free)';
+                if (array_key_exists('user_id', $d) && empty($d['user_id'])) return 'Anonymous (Twitch did not recognise your login)';
+                if (!empty($d['subscribed'])) return 'Anonymous (subscribed, but Twitch still shows your account ads)';
+                if (isset($d['subscribed']) && $d['subscribed'] === false) return 'Anonymous (not subscribed here)';
+                return 'Anonymous (your account gets ads here)';
             })("$chanDir/.auth_decision.json"),
             'heartbeat' => max($heartbeat, (int)@filemtime("$chanDir/state.json")) ?: null,
             // Routine "offline" checks are left out so the interesting lines stay visible.
@@ -548,6 +552,7 @@ if (isset($_GET['play'])) {
         'size'  => filesize("$d/video.mp4"),
         'channel' => (string)$_GET['ch'],
         'title' => (string)(read_json("$d/meta.json")['title'] ?? ''),
+        'me'    => (string)(read_json(REC_DIR . '/secret/token_status.json')['login'] ?? ''), // your Twitch name, highlighted in chat
     ];
     $inject = '<script>window.PLAYER_SOURCE = ' . json_encode($src, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES) . ';</script>';
     $pos = strpos($player, '<script>');

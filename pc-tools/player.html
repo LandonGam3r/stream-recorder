@@ -22,9 +22,54 @@
   main { flex: 1; display: flex; min-height: 0; }
   #stage { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; min-width: 0; }
   video { width: 100%; height: 100%; max-height: calc(100vh - 54px); background: #000; outline: none; }
+  #stage { position: relative; overflow: hidden; }
+  #stage:fullscreen video { max-height: 100vh; }
+  #stage.idle { cursor: none; }
+  /* custom controls, YouTube-style */
+  #controls { position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 14px 8px; background: linear-gradient(transparent, rgba(0,0,0,.75)); transition: opacity .2s; }
+  #stage.idle #controls { opacity: 0; pointer-events: none; }
+  #seek { position: relative; height: 18px; display: flex; align-items: center; cursor: pointer; }
+  #seek .track { position: relative; height: 4px; width: 100%; background: rgba(255,255,255,.25); border-radius: 2px; transition: height .1s; }
+  #seek:hover .track { height: 6px; }
+  #seek .track i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; width: 0; }
+  #seekBuf { background: rgba(255,255,255,.35); }
+  #seekPlay { background: var(--accent); }
+  #seekKnob { position: absolute; top: 50%; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; background: var(--accent); transform: scale(0); transition: transform .1s; pointer-events: none; }
+  #seek:hover #seekKnob { transform: scale(1); }
+  #seekMarks { position: absolute; left: 0; right: 0; top: 50%; height: 0; pointer-events: none; }
+  #seekMarks b { position: absolute; top: -7px; width: 2px; height: 14px; margin-left: -1px; background: #ffd75e; border-radius: 1px; opacity: .9; }
+  #preview { position: absolute; bottom: 24px; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; }
+  #seek:hover #preview { display: flex; }
+  #preview canvas { width: 192px; height: 108px; border-radius: 8px; border: 2px solid rgba(255,255,255,.9); background: #111; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
+  #preview canvas.none { display: none; }
+  #pvTime { font-size: 13px; font-weight: 600; text-shadow: 0 1px 3px #000; font-variant-numeric: tabular-nums; }
+  #ctrlRow { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+  #ctrlRow .grow { flex: 1; }
+  #ctrlRow button.ic { background: none; border: 0; padding: 6px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; }
+  #ctrlRow button.ic:hover { background: rgba(255,255,255,.12); }
+  #ctrlRow svg { width: 22px; height: 22px; fill: #fff; }
+  #cVol { width: 80px; accent-color: #fff; }
+  #cTime { font-size: 13px; margin-left: 8px; font-variant-numeric: tabular-nums; color: #eee; }
+  #cRate { background: rgba(0,0,0,.4); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; font: inherit; font-size: 12px; padding: 3px 4px; margin-right: 4px; }
+  /* chat search bar */
+  .chatbar { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .chatbar input[type=search] { flex: 1; min-width: 120px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 7px; padding: 5px 9px; font: inherit; font-size: 13px; }
+  .chatbar input:focus { outline: none; border-color: var(--accent); }
+  .chatbar select, .chatbar button { font-size: 12px; padding: 4px 8px; }
+  .chatbar select { background: #232532; color: var(--text); border: 1px solid #323544; border-radius: 7px; font: inherit; font-size: 12px; }
+  .chatbar .info { width: 100%; color: var(--muted); font-size: 12px; }
+  .chatbar .info:empty { display: none; }
+  .chatbar .me { display: flex; gap: 6px; align-items: center; width: 100%; font-size: 12px; color: var(--muted); }
+  .chatbar .me input { flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 7px; padding: 4px 8px; font: inherit; font-size: 12px; }
+  .msg.result { cursor: pointer; border-radius: 4px; padding-left: 4px; }
+  .msg.result:hover { background: rgba(255,255,255,.05); }
+  .msg.mine { background: rgba(155,135,255,.16); border-left: 3px solid var(--accent); padding-left: 6px; border-radius: 3px; }
+  .msg.mention { background: rgba(255,215,94,.12); border-left: 3px solid #ffd75e; padding-left: 6px; border-radius: 3px; }
+  mark { background: rgba(255,215,94,.35); color: inherit; border-radius: 2px; padding: 0 1px; }
   #dock { width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: none; flex-direction: column; min-height: 0; }
   #dock.show { display: flex; }
   #dockChat { flex: 1; overflow-y: auto; padding: 8px 10px; }
+  #dock { flex-direction: column; }
   #start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--bg); z-index: 5; }
   .startbox { max-width: 520px; text-align: center; padding: 24px; }
   .startbox h2 { margin: 0 0 8px; font-size: 22px; }
@@ -72,8 +117,29 @@
   </div>
 </header>
 <main>
-  <div id="stage"><video id="video" controls></video></div>
-  <aside id="dock"><div id="dockChat"></div></aside>
+  <div id="stage">
+    <video id="video" playsinline></video>
+    <div id="controls">
+      <div id="seek" title="">
+        <div class="track"><i id="seekBuf"></i><i id="seekPlay"></i></div>
+        <div id="seekMarks"></div>
+        <div id="seekKnob"></div>
+        <div id="preview"><canvas id="pvCanvas" width="192" height="108"></canvas><span id="pvTime">0:00</span></div>
+      </div>
+      <div id="ctrlRow">
+        <button id="cPlay" class="ic" title="Play (Space)"></button>
+        <button id="cBack" class="ic" title="Back 10 s (←)"></button>
+        <button id="cFwd" class="ic" title="Forward 10 s (→)"></button>
+        <button id="cMute" class="ic" title="Mute (M)"></button>
+        <input id="cVol" type="range" min="0" max="1" step="0.05" value="1" title="Volume">
+        <span id="cTime">0:00 / 0:00</span>
+        <span class="grow"></span>
+        <select id="cRate" title="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+        <button id="cFull" class="ic" title="Fullscreen (F)"></button>
+      </div>
+    </div>
+  </div>
+  <aside id="dock"><div class="chatbar" id="dockBar"></div><div id="dockChat"></div></aside>
 </main>
 
 <div id="start">
@@ -85,7 +151,7 @@
         <label class="btn primary" for="pickDir">Choose folder</label>
         <label class="btn" for="pickFiles">Choose files</label>
       </div>
-      <small>Everything stays on your computer - nothing is uploaded.<br>Shortcuts: Space play/pause · ←/→ 5 s · F fullscreen · C pop out chat</small>
+      <small>Everything stays on your computer - nothing is uploaded.<br>Shortcuts: Space/K play/pause · ←/→ 5 s · M mute · F fullscreen · C pop out chat</small>
     </div>
   </div>
 </div>
@@ -111,6 +177,11 @@
   let chatSize = 14;
   let videoUrl = null;
   let title = 'Stream chat';
+  let search = { q: '', field: 'name' };   // chat search; q = '' shows the live chat
+  let meName = '';                          // your Twitch name: your messages and @mentions are highlighted
+  let mePinned = false;                     // set by hand in the player (wins over the dashboard's)
+  try { meName = localStorage.getItem('stream-player-me') || ''; mePinned = !!meName; } catch (e) {}
+  if (!meName && window.PLAYER_SOURCE && window.PLAYER_SOURCE.me) meName = String(window.PLAYER_SOURCE.me);
 
   function toast(msg, ms) {
     toastEl.textContent = msg;
@@ -175,9 +246,28 @@
   }
 
   // ------------------------------------------------------------ rendering
-  function msgEl(doc, m) {
+  function isMine(m) { return !!meName && !!m.name && m.name.toLowerCase() === meName.toLowerCase(); }
+  function mentionsMe(m) {
+    if (!meName || isMine(m)) return false;
+    const n = meName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('(^|[^a-z0-9_])@?' + n + '($|[^a-z0-9_])', 'i').test(m.text);
+  }
+  /** Text with the search term marked (as text nodes, never HTML). */
+  function markText(doc, parent, text, q) {
+    if (!q) { parent.appendChild(doc.createTextNode(text)); return; }
+    const lo = text.toLowerCase(), ql = q.toLowerCase();
+    let i = 0, j;
+    while ((j = lo.indexOf(ql, i)) !== -1) {
+      if (j > i) parent.appendChild(doc.createTextNode(text.slice(i, j)));
+      const mk = doc.createElement('mark'); mk.textContent = text.slice(j, j + q.length); parent.appendChild(mk);
+      i = j + q.length;
+    }
+    if (i < text.length) parent.appendChild(doc.createTextNode(text.slice(i)));
+  }
+  function msgEl(doc, m, asResult) {
     const d = doc.createElement('div');
-    d.className = 'msg' + (m.kind !== 'chat' ? ' ' + m.kind : '');
+    d.className = 'msg' + (m.kind !== 'chat' ? ' ' + m.kind : '') + (isMine(m) ? ' mine' : mentionsMe(m) ? ' mention' : '') + (asResult ? ' result' : '');
+    if (asResult) d.addEventListener('click', () => { video.currentTime = Math.max(0, m.t + offset - 3); video.play(); });
     const ts = doc.createElement('span');
     ts.className = 'ts';
     ts.textContent = fmt(m.t + offset);
@@ -188,11 +278,11 @@
       const n = doc.createElement('span');
       n.className = 'name';
       n.style.color = colorFor(m.name);
-      n.textContent = m.name;
+      markText(doc, n, m.name, asResult && search.field === 'name' ? search.q : '');
       d.appendChild(n);
       d.appendChild(doc.createTextNode(m.kind === 'act' ? ' ' : ': '));
     }
-    d.appendChild(doc.createTextNode(m.text));
+    markText(doc, d, m.text, asResult && search.field === 'text' ? search.q : '');
     return d;
   }
 
@@ -213,9 +303,86 @@
 
   function nearBottom(c) { return c.scrollHeight - c.scrollTop - c.clientHeight < 60; }
 
+  // ------------------------------------------------------------ chat search
+  function searchResults() {
+    const q = search.q.toLowerCase();
+    if (!q) return [];
+    return messages.filter(m => (search.field === 'name' ? (m.name || '') : m.text).toLowerCase().includes(q));
+  }
+  function renderResults(c) {
+    const doc = c.ownerDocument;
+    const res = searchResults();
+    const frag = doc.createDocumentFragment();
+    res.slice(0, 2000).forEach(m => frag.appendChild(msgEl(doc, m, true)));
+    if (!res.length) frag.appendChild(Object.assign(doc.createElement('div'), { className: 'msg mod', textContent: 'No messages found.' }));
+    c.replaceChildren(frag);
+    c.scrollTop = 0;
+    setSearchInfo(res.length ? res.length + (res.length === 1 ? ' message' : ' messages') + (res.length > 2000 ? ' (first 2000 shown)' : '')
+      + ' - click one to jump there' : '');
+    drawMarks(res);
+  }
+  function setSearchInfo(t) { forEachBar(b => { b.querySelector('.info').textContent = t; }); }
+  function forEachBar(fn) {
+    fn(document.getElementById('dockBar'));
+    if (popup && !popup.closed) { const b = popup.document.getElementById('popBar'); if (b) fn(b); }
+  }
+  function setSearch(q, field) {
+    search.q = q;
+    if (field) search.field = field;
+    forEachBar(b => {
+      const i = b.querySelector('input[type=search]'); if (i.value !== q) i.value = q;
+      b.querySelector('select').value = search.field;
+      i.placeholder = search.field === 'name' ? 'Search chat by username…' : 'Search in messages…';
+    });
+    if (!q) { setSearchInfo(''); drawMarks([]); }
+    rebuild();
+  }
+  /** The search + "you" bar, built in the main window and in the pop-up. */
+  function buildChatBar(doc, bar) {
+    bar.replaceChildren();
+    const inp = doc.createElement('input'); inp.type = 'search'; inp.value = search.q;
+    inp.placeholder = search.field === 'name' ? 'Search chat by username…' : 'Search in messages…';
+    inp.setAttribute('list', 'chatUsers'); inp.spellcheck = false;
+    let t = null;
+    inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => setSearch(inp.value.trim()), 150); });
+    inp.addEventListener('keydown', e => { if (e.key === 'Escape') { inp.value = ''; setSearch(''); } e.stopPropagation(); });
+    const sel = doc.createElement('select');
+    [['name', 'User'], ['text', 'Message']].forEach(([v, l]) => { const o = doc.createElement('option'); o.value = v; o.textContent = l; sel.appendChild(o); });
+    sel.value = search.field; sel.title = 'Search in usernames or in message text';
+    sel.addEventListener('change', () => setSearch(search.q, sel.value));
+    const mine = doc.createElement('button'); mine.textContent = 'Me'; mine.title = 'Show your own messages';
+    mine.addEventListener('click', () => { if (!meName) { meRow.style.display = 'flex'; meIn.focus(); return; } setSearch(meName, 'name'); });
+    const info = doc.createElement('div'); info.className = 'info';
+    // "You are": the name to highlight
+    const meRow = doc.createElement('div'); meRow.className = 'me';
+    const meLbl = doc.createElement('span'); meLbl.textContent = 'You are';
+    const meIn = doc.createElement('input'); meIn.placeholder = 'your Twitch name'; meIn.value = meName; meIn.spellcheck = false;
+    meIn.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') meIn.blur(); });
+    meIn.addEventListener('change', () => {
+      meName = meIn.value.trim(); mePinned = true;
+      try { meName ? localStorage.setItem('stream-player-me', meName) : localStorage.removeItem('stream-player-me'); } catch (e) {}
+      forEachBar(b => { const x = b.querySelector('.me input'); if (x && x !== meIn) x.value = meName; });
+      rebuild();
+    });
+    meRow.append(meLbl, meIn);
+    meRow.style.display = meName ? 'none' : 'flex';
+    const meToggle = doc.createElement('button'); meToggle.textContent = '⚙'; meToggle.title = 'Your name (your messages and mentions are highlighted)';
+    meToggle.addEventListener('click', () => { meRow.style.display = meRow.style.display === 'none' ? 'flex' : 'none'; });
+    bar.append(inp, sel, mine, meToggle, meRow, info);
+  }
+  function fillUserList(doc) {
+    let dl = doc.getElementById('chatUsers');
+    if (!dl) { dl = doc.createElement('datalist'); dl.id = 'chatUsers'; doc.body.appendChild(dl); }
+    const count = new Map();
+    messages.forEach(m => { if (m.name) count.set(m.name, (count.get(m.name) || 0) + 1); });
+    dl.replaceChildren(...[...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 500)
+      .map(([n, k]) => Object.assign(doc.createElement('option'), { value: n, label: k + ' messages' })));
+  }
+
   function rebuild() {
     const c = container();
     if (!c) return;
+    if (search.q) { renderResults(c); return; }
     const doc = c.ownerDocument;
     c.replaceChildren();
     const upto = lastIndexAt(video.currentTime);
@@ -230,7 +397,7 @@
 
   function tick() {
     const c = container();
-    if (c && messages.length) {
+    if (c && messages.length && !search.q) {
       const upto = lastIndexAt(video.currentTime);
       if (upto < shownUntil || upto - shownUntil > 300) {
         rebuild(); // seeked backwards or jumped far ahead
@@ -272,8 +439,11 @@
     });
     const back = d.createElement('button'); back.textContent = 'Dock'; back.title = 'Put chat back next to the video';
     back.onclick = () => setMode('dock'); bar.appendChild(back);
+    const cbar = d.createElement('div'); cbar.className = 'chatbar'; cbar.id = 'popBar';
     const chat = d.createElement('div'); chat.id = 'chat';
-    d.body.append(bar, chat);
+    d.body.append(bar, cbar, chat);
+    buildChatBar(d, cbar);
+    fillUserList(d);
     d.addEventListener('keydown', onKey);
     applyChatSize();
     return true;
@@ -363,6 +533,12 @@
     };
 
     video.src = src.url;
+    setupThumbs(src.url, !src.remote);
+    if (!mePinned && src.me) { meName = String(src.me); }
+    fillUserList(document);
+    buildChatBar(document, document.getElementById('dockBar'));
+    if (popup && !popup.closed) { buildChatBar(popup.document, popup.document.getElementById('popBar')); fillUserList(popup.document); }
+    search.q = '';
 
     title = (meta.channel ? meta.channel + ' – ' : '') + (meta.title || vid.name);
     document.title = title + ' · Stream player';
@@ -396,7 +572,7 @@
     };
     try {
       const [chatText, metaText] = await Promise.all([get(src.chat), get(src.meta)]);
-      start({ url: src.video, name: src.name, size: src.size, chatText, metaText, remote: true });
+      start({ url: src.video, name: src.name, size: src.size, chatText, metaText, remote: true, me: src.me });
     } catch (e) {
       toast('Could not load this recording (' + e.message + '). Reload the page to try again.', 10000);
     }
@@ -597,12 +773,144 @@
   document.getElementById('dockBtn').addEventListener('click', () => setMode('dock'));
   video.addEventListener('seeked', rebuild);
 
+  // ------------------------------------------------------------ controls + seek-bar previews
+  const stage = document.getElementById('stage');
+  const seek = document.getElementById('seek');
+  const seekPlay = document.getElementById('seekPlay'), seekBuf = document.getElementById('seekBuf'), knob = document.getElementById('seekKnob');
+  const preview = document.getElementById('preview'), pvCanvas = document.getElementById('pvCanvas'), pvTime = document.getElementById('pvTime');
+  const ICONS = {
+    play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+    pause: '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>',
+    back: '<svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/><text x="12" y="16" font-size="7" text-anchor="middle" font-family="sans-serif" font-weight="700">10</text></svg>',
+    fwd: '<svg viewBox="0 0 24 24"><path d="M12 5V1l5 5-5 5V7a6 6 0 1 0 6 6h2a8 8 0 1 1-8-8z"/><text x="12" y="16" font-size="7" text-anchor="middle" font-family="sans-serif" font-weight="700">10</text></svg>',
+    vol: '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>',
+    mute: '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm18.6 3-2.8-2.8-1.4 1.4 2.8 2.8-2.8 2.8 1.4 1.4 2.8-2.8 2.8 2.8 1.4-1.4-2.8-2.8 2.8-2.8-1.4-1.4z"/></svg>',
+    full: '<svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>',
+    exit: '<svg viewBox="0 0 24 24"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>',
+  };
+  const $c = id => document.getElementById(id);
+  $c('cBack').innerHTML = ICONS.back; $c('cFwd').innerHTML = ICONS.fwd; $c('cFull').innerHTML = ICONS.full; // fixed SVG markup only
+  function togglePlay() { if (!video.src) return; video.paused ? video.play() : video.pause(); }
+  function updButtons() {
+    $c('cPlay').innerHTML = video.paused ? ICONS.play : ICONS.pause;
+    $c('cMute').innerHTML = video.muted || video.volume === 0 ? ICONS.mute : ICONS.vol;
+    $c('cFull').innerHTML = document.fullscreenElement ? ICONS.exit : ICONS.full;
+  }
+  function updTime() {
+    const d = video.duration || 0, t = video.currentTime || 0;
+    const pct = d ? Math.min(100, t / d * 100) : 0;
+    seekPlay.style.width = pct + '%'; knob.style.left = pct + '%';
+    let buf = 0;
+    for (let i = 0; i < video.buffered.length; i++) if (video.buffered.start(i) <= t + 1) buf = Math.max(buf, video.buffered.end(i));
+    seekBuf.style.width = (d ? Math.min(100, buf / d * 100) : 0) + '%';
+    $c('cTime').textContent = fmt(t) + ' / ' + fmt(d);
+  }
+  ['timeupdate', 'durationchange', 'progress', 'seeked'].forEach(ev => video.addEventListener(ev, updTime));
+  ['play', 'pause', 'volumechange'].forEach(ev => video.addEventListener(ev, updButtons));
+  document.addEventListener('fullscreenchange', updButtons);
+  $c('cPlay').onclick = togglePlay;
+  $c('cBack').onclick = () => { video.currentTime = Math.max(0, video.currentTime - 10); };
+  $c('cFwd').onclick = () => { video.currentTime = Math.min(video.duration || 0, video.currentTime + 10); };
+  $c('cMute').onclick = () => { video.muted = !video.muted; };
+  $c('cVol').oninput = e => { video.volume = +e.target.value; video.muted = video.volume === 0; };
+  $c('cRate').onchange = e => { video.playbackRate = +e.target.value; };
+  function toggleFull() { document.fullscreenElement ? document.exitFullscreen() : stage.requestFullscreen().catch(() => {}); }
+  $c('cFull').onclick = toggleFull;
+  // Buttons let go of the keyboard after a click, so Space keeps meaning play/pause.
+  document.querySelectorAll('#ctrlRow button, #ctrlRow select').forEach(b => b.addEventListener('click', () => { if (b.tagName === 'BUTTON') b.blur(); }));
+  $c('cRate').addEventListener('change', e => e.target.blur());
+  video.addEventListener('click', togglePlay);
+  video.addEventListener('dblclick', toggleFull);
+  // hide the controls while playing and the mouse rests
+  let idleT = null;
+  function wake() { stage.classList.remove('idle'); clearTimeout(idleT); idleT = setTimeout(() => { if (!video.paused) stage.classList.add('idle'); }, 2500); }
+  stage.addEventListener('mousemove', wake); video.addEventListener('pause', wake); video.addEventListener('play', wake);
+
+  // seeking by click/drag
+  function seekFrac(ev) { const r = seek.getBoundingClientRect(); return Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)); }
+  let dragging = false;
+  seek.addEventListener('pointerdown', ev => { if (!video.duration) return; dragging = true; seek.setPointerCapture(ev.pointerId); video.currentTime = seekFrac(ev) * video.duration; });
+  seek.addEventListener('pointerup', () => { dragging = false; });
+  seek.addEventListener('pointermove', ev => {
+    if (!video.duration) return;
+    const f = seekFrac(ev), t = f * video.duration;
+    const r = seek.getBoundingClientRect();
+    preview.style.left = Math.min(r.width - 100, Math.max(100, f * r.width)) + 'px';
+    pvTime.textContent = fmt(t);
+    if (dragging) video.currentTime = t;
+    wantThumb(t);
+  });
+
+  // Preview pictures: a second, hidden copy of the video is moved to the hovered moment and
+  // its frame copied. Remembered per position, so hovering back is instant.
+  const thumbVideo = document.createElement('video');
+  thumbVideo.muted = true; thumbVideo.preload = 'auto'; thumbVideo.playsInline = true;
+  Object.assign(thumbVideo.style, { position: 'fixed', left: '-9999px', top: '0', width: '192px', height: '108px' });
+  document.body.appendChild(thumbVideo);
+  const pvCtx = pvCanvas.getContext('2d');
+  const thumbs = new Map();             // slot -> canvas
+  let thumbStep = 5, thumbBusy = false, thumbWanted = null, thumbsOn = false;
+  function thumbSlot(t) { return Math.round(t / thumbStep); }
+  function showThumb(cv) { pvCanvas.classList.remove('none'); pvCtx.drawImage(cv, 0, 0); }
+  function wantThumb(t) {
+    if (!thumbsOn) { pvCanvas.classList.add('none'); return; }
+    const k = thumbSlot(t);
+    const cached = thumbs.get(k);
+    if (cached) { showThumb(cached); return; }
+    thumbWanted = k;
+    if (!thumbBusy) grabThumb();
+  }
+  function grabThumb() {
+    if (thumbWanted === null) return;
+    const k = thumbWanted; thumbWanted = null; thumbBusy = true;
+    const done = () => {
+      thumbVideo.removeEventListener('seeked', done);
+      try {
+        const cv = document.createElement('canvas'); cv.width = 192; cv.height = 108;
+        const vw = thumbVideo.videoWidth || 16, vh = thumbVideo.videoHeight || 9;
+        const sc = Math.min(192 / vw, 108 / vh), w = vw * sc, h = vh * sc;
+        const cx = cv.getContext('2d'); cx.fillStyle = '#000'; cx.fillRect(0, 0, 192, 108);
+        cx.drawImage(thumbVideo, (192 - w) / 2, (108 - h) / 2, w, h);
+        thumbs.set(k, cv);
+        if (thumbs.size > 400) thumbs.delete(thumbs.keys().next().value);
+        if (thumbWanted === null || thumbWanted === k) showThumb(cv);
+      } catch (e) {}
+      thumbBusy = false;
+      if (thumbWanted !== null) grabThumb();
+    };
+    thumbVideo.addEventListener('seeked', done);
+    thumbVideo.currentTime = Math.min(k * thumbStep, Math.max(0, (thumbVideo.duration || 0) - 0.5));
+  }
+  /** Previews for local files; for streaming from the server they'd download extra video, so off. */
+  function setupThumbs(url, local) {
+    thumbs.clear(); thumbWanted = null; thumbBusy = false;
+    thumbsOn = !!local;
+    if (thumbsOn) {
+      thumbVideo.src = url;
+      thumbVideo.addEventListener('loadedmetadata', () => { thumbStep = Math.max(2, (thumbVideo.duration || 0) / 600); }, { once: true });
+    } else thumbVideo.removeAttribute('src');
+  }
+  /** Search hits as ticks on the seek bar. */
+  function drawMarks(res) {
+    const box = document.getElementById('seekMarks'); box.replaceChildren();
+    const d = video.duration; if (!d || !res.length) return;
+    const seen = new Set();
+    res.forEach(m => {
+      const p = Math.round(Math.min(1, Math.max(0, (m.t + offset) / d)) * 400);
+      if (seen.has(p)) return; seen.add(p);
+      const b = document.createElement('b'); b.style.left = (p / 4) + '%'; box.appendChild(b);
+    });
+  }
+  video.addEventListener('durationchange', () => { if (search.q) drawMarks(searchResults()); });
+  updButtons(); updTime();
+
   function onKey(e) {
-    if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
-    if (e.key === ' ') { e.preventDefault(); video.paused ? video.play() : video.pause(); }
+    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if (e.key === ' ' || e.key === 'k' || e.key === 'K') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'ArrowRight') { video.currentTime += 5; }
     else if (e.key === 'ArrowLeft') { video.currentTime -= 5; }
-    else if (e.key === 'f' || e.key === 'F') { document.fullscreenElement ? document.exitFullscreen() : video.requestFullscreen(); }
+    else if (e.key === 'm' || e.key === 'M') { video.muted = !video.muted; }
+    else if (e.key === 'f' || e.key === 'F') { toggleFull(); }
     else if (e.key === 'c' || e.key === 'C') { setMode(mode === 'popup' ? 'dock' : 'popup'); }
   }
   document.addEventListener('keydown', onKey);

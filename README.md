@@ -16,7 +16,7 @@ Plain PHP, no database, no framework, no build step. Upload two folders and add 
 - **Chat included.** Chat is logged next to the video and replays in sync, also across ad breaks and stream hiccups.
 - **Lossless MP4.** Finished streams are converted to MP4 without re-encoding, in the background, at a speed your host can handle.
 - **Web dashboard.** Switch streamers on and off, see live status, alerts, disk IO and server processes, and play or delete recordings.
-- **Player with pop-out chat.** Watch a recording with chat docked or in a separate window (second screen). It downloads to your PC first for smooth playback, or streams.
+- **Player with pop-out chat.** Watch a recording with chat docked or in a separate window (second screen). Search the chat by username or text and jump to any message. Preview pictures appear when you hover the seek bar, and your own messages and mentions are highlighted. It downloads to your PC first for smooth playback, or streams.
 - **Optional YouTube upload.** Upload finished streams per streamer, resumable for files of any size.
 - **Optional ad-free recording.** Uses your own Twitch login where your account is ad-free (subscriptions/Turbo).
 - **Built for shared hosting.** Works within short process lifetimes, disk IO limits, memory limits and blocked ports; [details](docs/how-it-works.md).
@@ -67,6 +67,7 @@ Open the address it prints, log in with the key it shows, and add a streamer. Ne
 | [Security](docs/security.md) | What's protected how, and what to keep private |
 | [Troubleshooting](docs/troubleshooting.md) | Log messages and common problems |
 | [PC tools](pc-tools/README.md) | Stand-alone player and YouTube folder uploader |
+| [Changelog](CHANGELOG.md) | What changed in each version |
 
 ## Requirements
 
