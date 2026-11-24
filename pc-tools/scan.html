@@ -76,7 +76,7 @@
       <select id="quality">
         <option value="base">Fast (small model, ~150 MB)</option>
         <option value="small" selected>Good (~300 MB, recommended)</option>
-        <option value="turbo">Best (~1 GB, strong graphics card)</option>
+        <option value="turbo">Best (1.5–3 GB, strong graphics card with 8 GB+)</option>
       </select>
     </div>
     <p class="hint" id="howText"></p>
@@ -221,8 +221,18 @@
         if (s.state === 'failed') throw new Error('the server could not prepare the sound: ' + (s.error || 'unknown'));
         if (s.state === 'cancelled') throw new Error('the scan was cancelled on the dashboard');
         const mins = Math.floor((Date.now() - t0) / 60000);
-        step(s.state === 'preparing' ? 'The server is preparing the sound…' : 'Waiting for the server…', 0,
-          (s.note ? s.note : (s.state === 'requested' ? 'it starts at its next cron run' : '')) + (mins ? ' · ' + mins + ' min so far' : ''));
+        const pr = this.status.prep;
+        if (s.state === 'preparing' && pr && pr.total) {
+          // ffmpeg reads the recording at most `speed` x real time (slower while a stream records).
+          const pct = Math.min(100, 100 * pr.done / pr.total);
+          const took = Math.max(1, this.status.now - pr.started), rate = pr.done / took;
+          const left = rate > 0 ? Math.max(1, Math.round((pr.total - pr.done) / rate / 60)) : null;
+          step('The server is preparing the sound…', pct, clock(pr.done) + ' of ' + clock(pr.total) + ' (' + pct.toFixed(0) + '%)'
+            + (left ? ' · ~' + left + ' min left' : '') + (pr.speed ? ' · reads at most ' + pr.speed + '× real time' + (pr.speed <= 4 ? ' to stay under your IO limit' : '') : ''));
+        } else {
+          const why = s.note || (s.state === 'requested' ? 'it starts at its next cron run' : '');
+          step(s.state === 'preparing' ? 'The server is preparing the sound…' : 'Waiting for the server…', 0, [why, mins ? mins + ' min so far' : ''].filter(Boolean).join(' · '));
+        }
         await sleep(TEST ? 300 : 10000);
       }
     },
@@ -587,7 +597,11 @@
       if (p.status === 'progress' && p.total) {
         files[p.file] = [p.loaded, p.total];
         const v = Object.values(files), got = v.reduce((a, x) => a + x[0], 0), all = v.reduce((a, x) => a + x[1], 0);
-        modelLine('Speech model: downloading (only the first time) ' + (got / 1048576).toFixed(0) + ' of ' + (all / 1048576).toFixed(0) + ' MB');
+        modelLine(got >= all
+          ? 'Speech model: downloaded (' + (all / 1048576).toFixed(0) + ' MB) - loading it onto the ' + (gpu ? 'graphics card' : 'processor') + '; a large model can take a few minutes'
+          : 'Speech model: downloading (only the first time) ' + (got / 1048576).toFixed(0) + ' of ' + (all / 1048576).toFixed(0) + ' MB');
+      } else if (p.status === 'ready') {
+        modelLine('Speech model: starting up…');
       }
     };
     const f16 = gpu && gpu.features && gpu.features.has('shader-f16');

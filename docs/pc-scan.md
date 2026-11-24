@@ -32,7 +32,7 @@ For older footage, or recordings you only have on your PC: open `pc-tools/scan.h
    |---|---|---|
    | Fast | Whisper base | ~150 MB |
    | Good (recommended) | Whisper small | ~300 MB |
-   | Best | Whisper large-v3 turbo | ~1 GB, needs a strong graphics card |
+   | Best | Whisper large-v3 turbo | 1.5–3 GB, needs a strong graphics card (8 GB+); "Good" is usually the better balance |
 
 4. **Each piece:** the page downloads the sound, recognises the speech, translates it and saves the text on the server right away.
    - **Pausing is safe:** you can close the tab and continue later; it picks up from the last saved piece.

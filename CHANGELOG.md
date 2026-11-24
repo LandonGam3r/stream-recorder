@@ -2,6 +2,14 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.3.2] - 2026-11-24
+
+### Changed
+- **Progress while the server prepares the sound for a PC scan.** The scan page shows how far it is, the time left and the speed cap (e.g. *0:56:00 of 2:40:00 (35%) · ~25 min left · reads at most 4× real time*); the dashboard shows the percentage too. Before, it only said "preparing" for as long as it took.
+- **Clearer speech-model status:** after the download it says the model is being loaded onto the graphics card, which takes a while for the large model.
+- **Best quality** now states its real download size (1.5–3 GB).
+- **"Scan on your PC?" card:** tidier layout with padding, the streamer above the title, a highlighted *Scan on this PC* button, and the YouTube-wait note in colour.
+
 ## [1.3.1] - 2026-11-24
 
 ### Added
@@ -90,6 +98,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.3.2]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.1.0...v1.2.0

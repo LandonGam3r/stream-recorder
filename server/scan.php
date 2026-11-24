@@ -59,6 +59,18 @@ function scan_audio_parts(string $dir): array
     return $parts;
 }
 
+/** How far ffmpeg got preparing the sound: ['done' => seconds, 'total' => seconds, 'speed' => max x real time] or null. */
+function scan_prep_progress(string $dir, array $s): ?array
+{
+    if (($s['state'] ?? '') !== 'preparing') return null;
+    $f = "$dir/audio/progress.txt";
+    $tail = (string)@file_get_contents($f, false, null, max(0, (int)@filesize($f) - 2048));
+    $done = 0;
+    if (preg_match_all('/out_time_(?:us|ms)=(\d+)/', $tail, $m)) $done = (int)end($m[1]) / 1e6;
+    return ['done' => round($done), 'total' => (float)($s['prep_total'] ?? 0), 'speed' => (float)($s['prep_speed'] ?? 0),
+        'started' => (int)($s['job_started'] ?? 0)];
+}
+
 /** Should the YouTube upload of this recording wait for its scan? (logs once when the wait runs out) */
 function scan_holds_upload(string $dir): bool
 {
@@ -204,7 +216,10 @@ function scan_start_audio_job(string $dir, float $maxSpeed): void
     $speed = $maxSpeed > 0 && ffmpeg_has_readrate($ff) ? $maxSpeed : 0;
     $prefix = (@is_executable('/usr/bin/ionice') ? '/usr/bin/ionice -c3 ' : '')
         . (@is_executable('/usr/bin/nice') ? '/usr/bin/nice -n 19 ' : (@is_executable('/bin/nice') ? '/bin/nice -n 19 ' : ''));
-    $ffcmd = $prefix . escapeshellarg($ff) . ' -hide_banner -loglevel error -nostats -y' . ($speed ? " -readrate $speed" : '')
+    $total = (float)($meta['recorded_seconds'] ?? 0);
+    if ($total <= 0 && strpos($input, ' -f concat') === false) $total = media_duration($ff, trim(substr($input, 4), "' "));
+    $ffcmd = $prefix . escapeshellarg($ff) . ' -hide_banner -loglevel error -nostats -y -progress ' . escapeshellarg("$a/progress.txt")
+        . ($speed ? " -readrate $speed" : '')
         . $input . ' -map 0:a:0 -vn -ac 1 -ar 16000 -f segment -segment_time ' . SCAN_PIECE_SECONDS
         . ' -reset_timestamps 1 -segment_list ' . escapeshellarg("$a/list.csv") . ' -segment_list_type csv' . $codec
         . ' 2> ' . escapeshellarg("$a/ffmpeg.log") . ' < /dev/null';
@@ -212,8 +227,9 @@ function scan_start_audio_job(string $dir, float $maxSpeed): void
         . '; echo $? > ' . escapeshellarg("$a/.exit.tmp") . ' && mv ' . escapeshellarg("$a/.exit.tmp") . ' ' . escapeshellarg("$a/.exit");
     $setsid = @is_executable('/usr/bin/setsid') ? '/usr/bin/setsid ' : (@is_executable('/bin/setsid') ? '/bin/setsid ' : '');
     @exec('nohup ' . $setsid . '/bin/sh -c ' . escapeshellarg($inner) . ' > /dev/null 2>&1 < /dev/null &');
-    scan_update($dir, function (array &$x) {
+    scan_update($dir, function (array &$x) use ($total, $speed) {
         $x['state'] = 'preparing'; $x['job_started'] = time(); $x['updated'] = time();
+        $x['prep_total'] = round($total); $x['prep_speed'] = $speed;
         $x['job_tries'] = (int)($x['job_tries'] ?? 0) + 1; unset($x['note'], $x['error']);
     });
     logmsg('PC scan: preparing the sound of ' . basename($dir) . ' (' . ($opus ? 'Opus' : 'AAC') . ($speed ? ", max {$speed}x speed" : '') . ')');

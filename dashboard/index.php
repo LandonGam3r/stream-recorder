@@ -488,11 +488,13 @@ function scan_outputs(string $d): array
 function scan_info(string $d): ?array
 {
     if (!is_file("$d/scan.json")) return null;
+    if (!function_exists('scan_prep_progress') && is_file(REC_DIR . '/scan.php')) require_once REC_DIR . '/scan.php';
     $s = read_json("$d/scan.json");
     $tr = is_file("$d/transcript.json") ? read_json("$d/transcript.json") : [];
     return [
         'state' => (string)($s['state'] ?? ''), 'note' => $s['note'] ?? null, 'error' => $s['error'] ?? null,
         'pieces' => (int)($s['pieces'] ?? 0), 'done' => count($tr['parts'] ?? []),
+        'prep' => function_exists('scan_prep_progress') ? scan_prep_progress($d, $s) : null,
         'language' => $s['language'] ?? null, 'target' => $s['target'] ?? null,
         'segments' => (int)($s['segments'] ?? 0), 'updated' => (int)($s['updated'] ?? 0),
         'outputs' => scan_outputs($d),
@@ -672,7 +674,7 @@ if (isset($_GET['scanapi'])) {
     if ($op === 'status') {
         $s = scan_load($d);
         $tr = is_file("$d/transcript.json") ? read_json("$d/transcript.json") : [];
-        echo json_encode(['ok' => true, 'scan' => $s, 'pieces' => scan_audio_parts($d),
+        echo json_encode(['ok' => true, 'scan' => $s, 'pieces' => scan_audio_parts($d), 'prep' => scan_prep_progress($d, $s), 'now' => time(),
             'transcript' => ['parts' => $tr['parts'] ?? (object)[], 'language' => $tr['language'] ?? null,
                 'target' => $tr['target'] ?? null, 'model' => $tr['model'] ?? null],
             'outputs' => scan_outputs($d)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -1245,9 +1247,18 @@ if (isset($_GET['api'])) {
   .p-converting, .p-uploading { color: var(--accent); background: rgba(143,124,255,.14); }
   .p-upload-waiting { color: var(--warn); background: rgba(242,184,75,.13); }
   .card.scanask { border-color: rgba(143,124,255,.45); }
-  .askrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line, rgba(255,255,255,.08)); }
-  .askrow .subj { font-weight: 600; }
-  .askrow .meta { color: var(--muted, #9aa0aa); font-size: 12px; margin-top: 2px; }
+  .card.scanask .card-head { gap: 10px; }
+  .askrow { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 16px; padding: 12px 16px; border-top: 1px solid var(--line); }
+  .card-head + .askrow { border-top: 0; }
+  .askrow .who { color: var(--accent); font-weight: 600; font-size: 12px; text-transform: none; }
+  .askrow .subj { font-weight: 600; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .askrow .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .askrow .meta .wait { color: var(--warn); }
+  .askrow .acts { display: flex; gap: 8px; }
+  .askrow .act { padding: 6px 14px; font-size: 13px; }
+  .askrow .act.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .askrow .act.primary:hover { filter: brightness(1.1); }
+  @media (max-width: 640px) { .askrow { grid-template-columns: 1fr; } }
   .p-upload-queued { color: var(--accent); background: rgba(143,124,255,.08); }
   tr.confirm.yt td { background: rgba(143,124,255,.07); }
   tr.confirm select { margin: 0 6px; }
@@ -1670,6 +1681,7 @@ if (isset($_GET['api'])) {
     const sc = r.scan, d = el('div', 'rec-sub');
     let t = 'PC scan: ' + (SCAN_TEXT[sc.state] || sc.state);
     if (sc.state === 'scanning' && sc.pieces) t += ' (' + sc.done + ' of ' + sc.pieces + ' pieces)';
+    if (sc.state === 'preparing' && sc.prep && sc.prep.total) t += ' (' + Math.min(100, Math.floor(100 * sc.prep.done / sc.prep.total)) + '%' + (sc.prep.speed ? ', max ' + sc.prep.speed + '× real time' : '') + ')';
     if (sc.note && SCAN_ACTIVE.includes(sc.state)) t += ' · ' + sc.note;
     if (sc.state === 'failed' && sc.error) t += ' · ' + sc.error;
     d.textContent = t;
@@ -1705,17 +1717,22 @@ if (isset($_GET['api'])) {
     const card = el('div', 'card scanask');
     const head = el('div', 'card-head');
     head.append(el('h2', null, 'Scan on your PC?'), el('span', 'updated', 'subtitles, translation and spoken-word moments'));
+    if (asks.length > 1) head.append(el('span', 'badge badge-new', asks.length + ' streams'));
     card.append(head);
     asks.forEach(([c, r]) => {
       const row = el('div', 'askrow');
       const mid = el('div');
-      mid.append(el('div', 'subj', c.name + ' – ' + (r.title || r.folder)));
-      mid.append(el('div', 'meta', (r.started ? r.started.slice(0, 16) : r.folder) + (r.seconds ? ' · ' + dur(r.seconds) : '')
-        + (c.youtube ? ' · the YouTube upload (' + c.youtube + ') waits for your choice' : '')));
+      mid.style.minWidth = '0';
+      mid.append(el('div', 'who', c.name));
+      const subj = el('div', 'subj', r.title || r.folder); subj.title = r.title || r.folder;
+      mid.append(subj);
+      const meta = el('div', 'meta', (r.started ? r.started.slice(0, 16).replace('-', '/').replace('-', '/') : r.folder) + (r.seconds ? ' · ' + dur(r.seconds) : ''));
+      if (c.youtube) { meta.append(' · '); meta.append(el('span', 'wait', 'YouTube upload (' + c.youtube + ') waits for your choice')); }
+      mid.append(meta);
       const key = c.name + '/' + r.folder;
       if (scanErr[key]) mid.append(el('div', 'del-err', scanErr[key]));
       const btns = el('div', 'acts');
-      const go = el('button', 'act play', 'Scan on this PC'); go.onclick = () => openScan(c.name, r.folder, true);
+      const go = el('button', 'act primary', 'Scan on this PC'); go.onclick = () => openScan(c.name, r.folder, true);
       const no = el('button', 'act', 'Skip'); no.title = 'No scan; a YouTube upload goes ahead with the chat-based moments';
       no.onclick = () => scanAction('skip', c.name, r.folder);
       btns.append(go, no);
