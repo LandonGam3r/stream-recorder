@@ -138,8 +138,17 @@ function process_scans(): void
         }
     }
     if ($busy || !$waiting) return;
-    foreach ($convertQ as $j) if (!empty($j['started'])) return;           // a conversion is reading the disk
-    if (CONVERT_WHEN_IDLE && function_exists('any_channel_recording') && any_channel_recording()) return;
+    $note = function (string $n) use ($waiting) {
+        foreach ($waiting as $d) scan_update($d, function (array &$x) use ($n) { $x['note'] = $n; });
+    };
+    foreach ($convertQ as $j) if (!empty($j['started'])) { $note('waits for the running MP4 conversion to finish'); return; }
+    // Only the sound is read, so it may run during a recording - at half speed, to leave the IO limit to the recording.
+    $recording = function_exists('any_channel_recording') && any_channel_recording();
+    $speed = CONVERT_SPEED > 0 ? 2 * (float)CONVERT_SPEED : 0;
+    if ($recording && CONVERT_WHEN_IDLE) {
+        if (CONVERT_SPEED <= 0) { $note('waits until nothing is recording (set CONVERT_SPEED to allow it during recordings)'); return; }
+        $speed = (float)CONVERT_SPEED;
+    }
     foreach ($waiting as $dir) {
         if (isset($convertQ[$dir])) {                                       // needs the finished video first
             scan_update($dir, function (array &$x) { $x['note'] = 'waiting for the MP4 conversion'; });
@@ -147,13 +156,13 @@ function process_scans(): void
         }
         $own = $GLOBALS['logFile'] ?? null;
         $GLOBALS['logFile'] = dirname($dir) . '/recorder.log';
-        scan_start_audio_job($dir);
+        scan_start_audio_job($dir, $speed);
         $GLOBALS['logFile'] = $own;
         return; // one at a time
     }
 }
 
-function scan_start_audio_job(string $dir): void
+function scan_start_audio_job(string $dir, float $maxSpeed): void
 {
     // Already cut earlier (a second scan, e.g. with another language): reuse.
     if (scan_audio_parts($dir) && trim((string)@file_get_contents("$dir/audio/.exit")) === '0') {
@@ -192,7 +201,7 @@ function scan_start_audio_job(string $dir): void
     $codec = $opus ? ' -c:a libopus -b:a 20k -application voip -segment_format ogg ' . escapeshellarg("$a/part%03d.ogg")
                    : ' -c:a aac -b:a 32k -segment_format mp4 ' . escapeshellarg("$a/part%03d.m4a");
     // Only the sound is decoded, so it's light on CPU; reading the file is what counts towards the IO limit.
-    $speed = CONVERT_SPEED > 0 && ffmpeg_has_readrate($ff) ? 2 * (float)CONVERT_SPEED : 0;
+    $speed = $maxSpeed > 0 && ffmpeg_has_readrate($ff) ? $maxSpeed : 0;
     $prefix = (@is_executable('/usr/bin/ionice') ? '/usr/bin/ionice -c3 ' : '')
         . (@is_executable('/usr/bin/nice') ? '/usr/bin/nice -n 19 ' : (@is_executable('/bin/nice') ? '/bin/nice -n 19 ' : ''));
     $ffcmd = $prefix . escapeshellarg($ff) . ' -hide_banner -loglevel error -nostats -y' . ($speed ? " -readrate $speed" : '')

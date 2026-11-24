@@ -31,8 +31,10 @@ jobs:
           open('/tmp/scan.mjs', 'w').write(src[a:b])
           PY
           node --check /tmp/scan.mjs
-      - name: Players are identical
-        run: cmp dashboard/player.html pc-tools/player.html
+      - name: Players and scan pages are identical
+        run: |
+          cmp dashboard/player.html pc-tools/player.html
+          cmp dashboard/scan.html pc-tools/scan.html
       - name: Python syntax
         run: python3 -m py_compile pc-tools/yt_uploader.py
       - name: Shell syntax

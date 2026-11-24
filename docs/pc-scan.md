@@ -7,6 +7,10 @@ A web host can't run speech recognition, but your PC can, in the browser on its 
 - **translated chat** (optional), shown in the player with the *Translated* switch;
 - **spoken-word moments** for YouTube: the rule type *Streamer says* finds words the streamer said, like *Chat message contains* does for chat ([dashboard.md → YouTube moments](dashboard.md#youtube-moments)).
 
+## Without the server: `pc-tools/scan.html`
+
+For older footage, or recordings you only have on your PC: open `pc-tools/scan.html` from disk in Chrome or Edge, choose the recording folder, and start. It reads the sound straight from the MP4 (AAC or Opus; normal or fragmented) and writes the subtitle and translation files into that folder, where `player.html` finds them. See [pc-tools/README.md](../pc-tools/README.md#pc-scan-scanhtml-subtitles-and-translation).
+
 ## What you need
 
 - **Chrome or Edge on a desktop PC**, version 138 or newer.
@@ -18,7 +22,8 @@ A web host can't run speech recognition, but your PC can, in the browser on its 
 1. **After a stream**, for streamers whose setting *PC scan after each stream* is *Ask me*, the dashboard shows **Scan on your PC?** at the top. *Skip* uploads to YouTube as before, with moments from chat only. You can also scan any recording later with its **Scan** button.
 2. **Scan on this PC** opens the scan page in a new tab, and the server prepares the sound at its next cron run:
    - ffmpeg cuts only the sound track into 10-minute pieces (mono, 16 kHz, about 1.5–2.5 MB each).
-   - This reads the recording once, at twice `CONVERT_SPEED`, while nothing records and no conversion runs.
+   - This reads the recording once, at twice `CONVERT_SPEED`, and not while a conversion runs.
+   - **During a recording** it runs at `CONVERT_SPEED` instead, to leave room for the recording; with `CONVERT_SPEED` at 0 it waits until nothing records. The scan page shows why it's waiting.
 3. **On the scan page:**
    - **Choose:** the language the streamer speaks, what to translate to, whether to translate the chat, and the speech quality.
    - **Press Start scan.** The first time, the browser downloads the speech model from Hugging Face; after that it is kept by the browser.

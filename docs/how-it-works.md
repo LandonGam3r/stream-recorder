@@ -21,7 +21,7 @@ flowchart LR
   - **Manager** (started every minute without arguments): reads the streamer list, starts a recording run for each switched-on streamer, and does the background work (token check, conversions, uploads, IO sampling). Each piece runs as its own short process.
   - **Recording run** (`record.php <streamer>`): checks whether the streamer is live and records video and chat.
 - **`dashboard/index.php`**: the web interface, plus a small JSON API used by the page itself. It never talks to Twitch; it reads the recorder's files and writes only `channels.json` and deletions.
-- **`dashboard/scan.html`**: the PC scan page; runs speech recognition and translation in your browser ([pc-scan.md](pc-scan.md)).
+- **`dashboard/scan.html`** and **`pc-tools/scan.html`**: the same PC scan page; it runs speech recognition and translation in your browser. From the dashboard it gets the sound from the server; opened from disk it reads a recording folder on your PC ([pc-scan.md](pc-scan.md)).
 - **`dashboard/player.html`** and **`pc-tools/player.html`**: the same player file, served by the dashboard or opened from disk.
 
 ## Recording in relays

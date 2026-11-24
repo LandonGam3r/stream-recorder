@@ -18,7 +18,7 @@ Plain PHP, no database, no framework, no build step. Upload two folders and add 
 - **Web dashboard.** Switch streamers on and off, see live status, alerts, disk IO and server processes, and play or delete recordings.
 - **Player with pop-out chat.** Watch a recording with chat docked or in a separate window (second screen). Search the chat by username or text and jump to any message. Preview pictures appear when you hover the seek bar, and your own messages and mentions are highlighted. It downloads to your PC first for smooth playback, or streams.
 - **Optional YouTube upload.** Upload finished streams per streamer, resumable for files of any size. *Moments* rules scan chat and stream info (raids, hype bursts, a user's message, a category) and tag the title and description with timestamps. Any recording can also be uploaded by hand.
-- **Subtitles and translation (optional).** A PC scan recognises what the streamer says, in the browser on your own graphics card. It makes subtitles, translated subtitles and translated chat for the player, and spoken-word moments for YouTube ([details](docs/pc-scan.md)).
+- **Subtitles and translation (optional).** A PC scan recognises what the streamer says, in the browser on your own graphics card. It makes subtitles, translated subtitles and translated chat for the player, and spoken-word moments for YouTube. Also works stand-alone for footage on your PC ([details](docs/pc-scan.md)).
 - **Optional ad-free recording.** Uses your own Twitch login where your account is ad-free (subscriptions/Turbo).
 - **Built for shared hosting.** Works within short process lifetimes, disk IO limits, memory limits and blocked ports; [details](docs/how-it-works.md).
 - **Secure by default.**

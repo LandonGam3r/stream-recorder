@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>PC scan · Stream Recorder™</title>
+<!--
+  PC scan: subtitles, translation and translated chat, made on this PC (speech recognition with Whisper
+  on the graphics card, translation with the translator built into Chrome/Edge).
+  The same file works two ways:
+  - opened from the dashboard (dashboard/scan.html): the sound comes from your server, results go back to it;
+  - opened from disk (pc-tools/scan.html): pick a recording folder; results are written into that folder,
+    where the PC player finds them.
+-->
 <style>
   :root { --bg: #0f1115; --panel: #171a21; --line: #262a33; --text: #e6e8ec; --muted: #8b93a1; --ok: #3ccf91; --warn: #f2b84b; --bad: #ff6b6b; --accent: #8f7cff; }
   * { box-sizing: border-box; }
@@ -26,7 +34,7 @@
   .bar { height: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 10px 0 6px; }
   .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
   #step { font-weight: 600; }
-  #detail { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  #detail, #model { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
   #log { margin: 10px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--muted); max-height: 220px; overflow: auto; }
   #log li { padding: 2px 0; border-top: 1px solid var(--line); }
   #log li.bad { color: var(--bad); } #log li.ok { color: var(--ok); } #log li.warn { color: var(--warn); }
@@ -35,6 +43,7 @@
   .msg.warn { background: rgba(242,184,75,.1); color: var(--warn); }
   .msg.ok { background: rgba(60,207,145,.1); color: var(--ok); }
   a { color: var(--accent); }
+  code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
   #preview { font-size: 13px; max-height: 180px; overflow: auto; margin-top: 10px; }
   #preview div { padding: 2px 0; } #preview .t { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
   #preview .tr { color: var(--muted); display: block; margin-left: 52px; }
@@ -48,6 +57,12 @@
 <main>
   <div id="notice"></div>
 
+  <div class="card" id="pick" hidden>
+    <h2>Recording</h2>
+    <p style="margin-top:0">Choose a folder with a recording: a video (<code>.mp4</code>, <code>.m4v</code> or <code>.mov</code>), and optionally <code>chat.txt</code>. The subtitles and translations are saved in that folder, where the PC player finds them. One recording per folder.</p>
+    <div class="row"><button class="primary" id="pickBtn">Choose folder</button><span class="hint" id="pickInfo"></span></div>
+  </div>
+
   <div class="card" id="setup">
     <h2>Settings</h2>
     <div class="grid">
@@ -56,7 +71,7 @@
       <label for="target">Translate to</label>
       <select id="target"></select>
       <label for="chatTr">Chat</label>
-      <label class="row" style="color:var(--text)"><input type="checkbox" id="chatTr" checked> also translate the chat</label>
+      <label class="row" style="color:var(--text)"><input type="checkbox" id="chatTr" checked> <span>also translate the chat</span></label>
       <label for="quality">Speech recognition</label>
       <select id="quality">
         <option value="base">Fast (small model, ~150 MB)</option>
@@ -64,7 +79,7 @@
         <option value="turbo">Best (~1 GB, strong graphics card)</option>
       </select>
     </div>
-    <p class="hint">Everything runs on this PC, on its graphics card: only the stream's sound comes from your server (about 2 MB per 10 minutes). The speech model downloads once from Hugging Face and is then kept by the browser; translation uses the translator built into Chrome/Edge. Keep this tab open until it's done. It saves after every 10 minutes of sound, so you can close it and continue later.</p>
+    <p class="hint" id="howText"></p>
     <div class="row"><button class="primary" id="startBtn">Start scan</button><span class="hint" id="startHint"></span></div>
   </div>
 
@@ -73,6 +88,7 @@
     <div id="step">Starting…</div>
     <div class="bar"><i id="barFill"></i></div>
     <div id="detail"></div>
+    <div id="model"></div>
     <div class="row" id="actions" style="margin-top:10px"></div>
     <div id="preview"></div>
     <ul id="log"></ul>
@@ -80,13 +96,15 @@
 </main>
 
 <script type="module">
-  const SRC = window.SCAN_SOURCE || {};
+  const SRC = window.SCAN_SOURCE || null;  // set by the dashboard; absent when opened from disk
+  const LOCAL = !SRC;
   const LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
   const MODELS = {
     base:  { id: 'onnx-community/whisper-base', name: 'Whisper base' },
     small: { id: 'onnx-community/whisper-small', name: 'Whisper small' },
     turbo: { id: 'onnx-community/whisper-large-v3-turbo', name: 'Whisper large-v3 turbo' },
   };
+  const PIECE = 600; // seconds of sound per piece (same as the server)
   const LANGS = ['en', 'nl', 'de', 'fr', 'es', 'it', 'pt', 'pl', 'tr', 'ru', 'uk', 'sv', 'da', 'no', 'fi', 'cs', 'hu', 'ro', 'el', 'ja', 'ko', 'zh', 'ar', 'hi', 'id', 'vi', 'th'];
   const ACTIVE = ['requested', 'preparing', 'ready', 'scanning'];
   const $ = s => document.querySelector(s);
@@ -97,42 +115,44 @@
   const TEST = window.SCAN_TEST || null; // automated tests replace the speech model and translator
 
   // ------------------------------------------------------------ page setup
-  $('#what').textContent = [SRC.channel, SRC.title || SRC.folder, (SRC.started || '').slice(0, 16), SRC.seconds ? clock(SRC.seconds) : ''].filter(Boolean).join(' · ');
-  document.title = 'PC scan · ' + (SRC.channel || '') + ' · Stream Recorder™';
-  const prefKey = 'scan-prefs-' + (SRC.channel || '');
+  $('#howText').textContent = LOCAL
+    ? 'Everything runs on this PC, on its graphics card. The speech model downloads once from Hugging Face and is then kept by the browser; translation uses the translator built into Chrome/Edge. Keep this tab open until it\'s done. It saves after every 10 minutes of sound, so you can stop and continue later by choosing the same folder.'
+    : 'Everything runs on this PC, on its graphics card: only the stream\'s sound comes from your server (about 2 MB per 10 minutes). The speech model downloads once from Hugging Face and is then kept by the browser; translation uses the translator built into Chrome/Edge. Keep this tab open until it\'s done. It saves after every 10 minutes of sound, so you can close it and continue later.';
+  function showWhat(info) {
+    $('#what').textContent = [info.channel, info.title, (info.started || '').slice(0, 16), info.seconds ? clock(info.seconds) : ''].filter(Boolean).join(' · ');
+    document.title = 'PC scan · ' + (info.channel || info.title || '') + ' · Stream Recorder™';
+  }
+  let prefKey = 'scan-prefs';
   let prefs = {};
-  try { prefs = JSON.parse(localStorage.getItem(prefKey) || localStorage.getItem('scan-prefs') || '{}') || {}; } catch (e) {}
-  const myLang = (navigator.language || 'en').slice(0, 2).toLowerCase();
+  function loadPrefs(channel) {
+    prefKey = 'scan-prefs-' + (channel || '');
+    try { prefs = JSON.parse(localStorage.getItem(prefKey) || localStorage.getItem('scan-prefs') || '{}') || {}; } catch (e) { prefs = {}; }
+    const myLang = (navigator.language || 'en').slice(0, 2).toLowerCase();
+    $('#spoken').value = prefs.spoken || 'en';
+    $('#target').value = prefs.target != null ? prefs.target : (LANGS.includes(myLang) ? myLang : 'en');
+    $('#quality').value = prefs.quality || 'small';
+    $('#chatTr').checked = prefs.chat !== false;
+  }
   LANGS.forEach(c => $('#spoken').append(Object.assign(el('option', null, langName(c)), { value: c })));
   $('#target').append(Object.assign(el('option', null, 'No translation'), { value: '' }));
   LANGS.forEach(c => $('#target').append(Object.assign(el('option', null, langName(c)), { value: c })));
-  $('#spoken').value = prefs.spoken || 'en';
-  $('#target').value = prefs.target != null ? prefs.target : (LANGS.includes(myLang) ? myLang : 'en');
-  $('#quality').value = prefs.quality || 'small';
-  $('#chatTr').checked = prefs.chat !== false;
-  if (!SRC.has_chat) { $('#chatTr').checked = false; $('#chatTr').disabled = true; $('#chatTr').parentElement.append(' (no chat in this recording)'); }
+  function setHasChat(has) {
+    $('#chatTr').disabled = !has;
+    if (!has) $('#chatTr').checked = false;
+    $('#chatTr').nextElementSibling.textContent = has ? 'also translate the chat' : 'no chat.txt with this recording';
+  }
 
   function notice(text, kind) {
     const n = $('#notice'); n.replaceChildren();
     if (text) n.append(el('div', 'msg ' + (kind || 'warn'), text));
   }
-  function log(text, kind) {
-    const li = el('li', kind || null, new Date().toLocaleTimeString() + '  ' + text);
-    $('#log').prepend(li);
-  }
+  function log(text, kind) { $('#log').prepend(el('li', kind || null, new Date().toLocaleTimeString() + '  ' + text)); }
   function step(text, pct, detail) {
     $('#step').textContent = text;
     if (pct != null) $('#barFill').style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%';
     $('#detail').textContent = detail || '';
   }
-  async function api(op, body) {
-    const r = await fetch(SRC.api, { method: 'POST', credentials: 'same-origin', cache: 'no-store',
-      headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': SRC.token },
-      body: JSON.stringify(Object.assign({ op, channel: SRC.channel, folder: SRC.folder }, body || {})) });
-    const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status + (r.status === 404 ? ' (logged out? reload the dashboard)' : '') }));
-    if (!j.ok) throw new Error(j.error || 'HTTP ' + r.status);
-    return j;
-  }
+  const modelLine = t => { $('#model').textContent = t || ''; };
 
   // What this browser can do.
   let gpu = null;
@@ -142,25 +162,390 @@
     try { if (navigator.gpu) gpu = await navigator.gpu.requestAdapter(); } catch (e) {}
     if (!gpu) probs.push('No WebGPU graphics card access in this browser, so speech recognition runs on the processor: expect several times longer than the stream itself. Chrome or Edge on a PC with a graphics card is much faster.');
     if (!('Translator' in self)) probs.push('This browser has no built-in translator (Chrome 138+ or Edge on a desktop PC), so only the subtitles in the spoken language are made.');
+    if (LOCAL && !('showDirectoryPicker' in self)) probs.push('This browser can\'t open folders: use Chrome or Edge on a desktop PC.');
+    if (LOCAL && !('AudioDecoder' in self)) probs.push('This browser can\'t decode video sound itself (WebCodecs): use Chrome or Edge.');
     return probs;
   }
-  let status = null;
-  async function refreshStatus() { status = await api('status'); return status; }
 
-  (async () => {
-    const probs = await checkBrowser();
-    if (probs.length) notice(probs.join(' '), 'warn');
-    try {
-      await refreshStatus();
-      const st = status.scan.state || '';
-      const done = Object.keys(status.transcript.parts || {}).length;
+  // ------------------------------------------------------------ subtitles file (WebVTT)
+  function vtt(segs, col) {
+    const ts = t => { const ms = Math.round(Math.max(0, t) * 1000); return [Math.floor(ms / 3600000), Math.floor(ms / 60000) % 60, Math.floor(ms / 1000) % 60].map(x => String(x).padStart(2, '0')).join(':') + '.' + String(ms % 1000).padStart(3, '0'); };
+    let out = 'WEBVTT\n\n', n = 0;
+    for (const g of segs) {
+      const text = String(g[col] || '').replace(/\r/g, '').replace(/-->/g, '->').replace(/\n{2,}/g, '\n').trim();
+      if (!text) continue;
+      out += (++n) + '\n' + ts(g[0]) + ' --> ' + ts(Math.max(g[1], g[0] + 0.5)) + '\n' + text + '\n\n';
+    }
+    return out;
+  }
+
+  // ============================================================ where the sound comes from and results go
+  // Both kinds have the same methods: init, saved, pieces, samples, save, finish, chatText, saveChat, fail.
+
+  // ---- from the dashboard: sound pieces on the server
+  const serverBackend = {
+    status: null,
+    async api(op, body) {
+      const r = await fetch(SRC.api, { method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': SRC.token },
+        body: JSON.stringify(Object.assign({ op, channel: SRC.channel, folder: SRC.folder }, body || {})) });
+      const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status + (r.status === 404 ? ' (logged out? reload the dashboard)' : '') }));
+      if (!j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+      return j;
+    },
+    async refresh() { this.status = await this.api('status'); return this.status; },
+    async init() {
+      showWhat(SRC); loadPrefs(SRC.channel); setHasChat(!!SRC.has_chat);
+      await this.refresh();
+      const st = this.status.scan.state || '';
+      const done = Object.keys(this.status.transcript.parts || {}).length;
       if (st === 'done') $('#startHint').textContent = 'This recording was scanned before. Starting again reuses what is there for the same language and quality, and only adds what\'s missing (e.g. a new translation).';
       else if (done) $('#startHint').textContent = done + ' piece(s) were already scanned; it continues from there.';
-      else if (st === 'preparing' || st === 'requested') $('#startHint').textContent = 'The server is preparing the sound; you can start already.';
-    } catch (e) { notice('Could not reach the dashboard: ' + e.message, 'bad'); $('#startBtn').disabled = true; }
-  })();
+      else if (st === 'preparing' || st === 'requested') $('#startHint').textContent = 'The server is preparing the sound; you can start already.' + (this.status.scan.note ? ' (' + this.status.scan.note + ')' : '');
+    },
+    /** Earlier results: {parts, language, model, count} */
+    async saved() {
+      await this.refresh();
+      const tr = this.status.transcript;
+      return { parts: tr.parts || {}, language: tr.language, model: tr.model, count: this.status.scan.pieces || 0 };
+    },
+    /** [[name, start, end], ...]; asks the server to prepare the sound when needed, then waits for it. */
+    async pieces(needSound) {
+      if (!needSound || this.status.pieces.length) return this.status.pieces;
+      if (!ACTIVE.includes(this.status.scan.state)) { await this.api('request'); log('Asked the server to prepare the sound'); }
+      const t0 = Date.now();
+      for (;;) {
+        await this.refresh();
+        const s = this.status.scan;
+        if (this.status.pieces.length && s.state !== 'preparing' && s.state !== 'requested') return this.status.pieces;
+        if (s.state === 'failed') throw new Error('the server could not prepare the sound: ' + (s.error || 'unknown'));
+        if (s.state === 'cancelled') throw new Error('the scan was cancelled on the dashboard');
+        const mins = Math.floor((Date.now() - t0) / 60000);
+        step(s.state === 'preparing' ? 'The server is preparing the sound…' : 'Waiting for the server…', 0,
+          (s.note ? s.note : (s.state === 'requested' ? 'it starts at its next cron run' : '')) + (mins ? ' · ' + mins + ' min so far' : ''));
+        await sleep(TEST ? 300 : 10000);
+      }
+    },
+    async samples(i, piece) {
+      const r = await fetch(SRC.files + encodeURIComponent('audio/' + piece[0]), { credentials: 'same-origin', cache: 'no-store' });
+      if (!r.ok) throw new Error('could not download sound piece ' + (i + 1) + ' (HTTP ' + r.status + ')');
+      const ctx = new OfflineAudioContext(1, 16000, 16000); // decoded straight to mono 16 kHz, what Whisper expects
+      return (await ctx.decodeAudioData(await r.arrayBuffer())).getChannelData(0);
+    },
+    save(i, segs, info) { return this.api('save', Object.assign({ part: i, segments: segs }, info)); },
+    finish() { return this.api('finish'); },
+    async chatText() {
+      if (!SRC.has_chat) return null;
+      const r = await fetch(SRC.files + 'chat.txt', { credentials: 'same-origin', cache: 'no-store' });
+      return r.ok ? r.text() : null;
+    },
+    saveChat(target, map) { return this.api('chat', { target, map }); },
+    fail(msg) { return this.api('fail', { error: msg }); },
+    doneText: 'Subtitles{chat} are saved with the recording; spoken-word moments are added at the next cron run, before a YouTube upload.',
+    playerUrl: () => SRC.player,
+  };
 
-  // ------------------------------------------------------------ translation (built into Chrome/Edge)
+  // ---- opened from disk: a recording folder on this PC
+  const localBackend = {
+    dir: null, video: null, chatFile: null, index: null, transcript: null,
+    async init() {
+      $('#pick').hidden = false;
+      $('#setup').hidden = true;
+      $('#what').textContent = 'Choose a recording folder';
+      $('#pickBtn').onclick = () => this.pick().catch(e => { if (e.name !== 'AbortError') notice('Could not open that folder: ' + e.message, 'bad'); });
+    },
+    async pick() {
+      const dir = TEST && TEST.dir ? await TEST.dir() : await showDirectoryPicker({ id: 'scan-recording', mode: 'readwrite' });
+      const files = [];
+      for await (const [name, h] of dir.entries()) if (h.kind === 'file') files.push(name);
+      const videos = [];
+      for (const n of files) if (/\.(mp4|m4v|mov)$/i.test(n)) videos.push(await (await dir.getFileHandle(n)).getFile());
+      videos.sort((a, b) => (b.name.toLowerCase() === 'video.mp4') - (a.name.toLowerCase() === 'video.mp4') || b.size - a.size);
+      if (!videos.length) {
+        notice(files.some(n => /\.ts$/i.test(n)) ? 'This folder only has .ts video. Convert it to MP4 first (ffmpeg -i video.ts -c copy video.mp4), then choose the folder again.' : 'No .mp4, .m4v or .mov video in this folder.', 'bad');
+        return;
+      }
+      this.dir = dir; this.video = videos[0];
+      const chatName = files.find(n => n.toLowerCase() === 'chat.txt') || files.find(n => /^chat.*\.txt$/i.test(n));
+      this.chatFile = chatName ? await (await dir.getFileHandle(chatName)).getFile() : null;
+      let meta = {};
+      try { meta = JSON.parse(await (await (await dir.getFileHandle('meta.json')).getFile()).text()); } catch (e) {}
+      if (!meta.channel && this.chatFile) {
+        const m = /^#META (.*)$/m.exec(await this.chatFile.slice(0, 4096).text());
+        if (m) { try { meta = Object.assign(JSON.parse(m[1]), meta); } catch (e) {} }
+      }
+      try { this.transcript = JSON.parse(await (await (await dir.getFileHandle('transcript.json')).getFile()).text()); } catch (e) { this.transcript = null; }
+      notice('');
+      showWhat({ channel: meta.channel, title: meta.title || this.video.name, started: meta.stream_started, seconds: meta.recorded_seconds });
+      loadPrefs(meta.channel || '');
+      setHasChat(!!this.chatFile);
+      this.index = null;
+      const done = this.transcript ? Object.keys(this.transcript.parts || {}).length : 0;
+      $('#pickInfo').textContent = dir.name + ': ' + this.video.name + ' (' + (this.video.size / 1073741824).toFixed(2) + ' GB)' + (this.chatFile ? ' + chat' : '');
+      $('#startHint').textContent = done ? done + ' piece(s) were already scanned; it continues from there (same language and quality).' : '';
+      $('#setup').hidden = false;
+    },
+    async saved() {
+      const t = this.transcript || {};
+      return { parts: t.parts || {}, language: t.language, model: t.model, count: t.pieces || 0 };
+    },
+    async pieces() {
+      if (!this.index) {
+        step('Reading the video file…', 0, this.video.name);
+        this.index = await indexAudio(this.video, p => step('Reading the video file…', p * 100, this.video.name));
+        log('Sound track: ' + this.index.codec + ', ' + this.index.sampleRate + ' Hz, ' + clock(this.index.duration), 'ok');
+      }
+      const ix = this.index, n = Math.max(1, Math.ceil((ix.duration - 1) / PIECE)), out = [];
+      for (let i = 0; i < n; i++) out.push([null, ix.t0 + i * PIECE, Math.min(ix.t0 + (i + 1) * PIECE, ix.t0 + ix.duration)]);
+      return out;
+    },
+    samples(i, piece) { return decodeRange(this.video, this.index, piece[1], piece[2]); },
+    async write(name, text) {
+      const w = await (await this.dir.getFileHandle(name, { create: true })).createWritable();
+      await w.write(text); await w.close();
+    },
+    async save(i, segs, info) {
+      const t = this.transcript && this.transcript.language === info.language && this.transcript.model === info.model ? this.transcript : { parts: {} };
+      t.parts = t.parts || {};
+      t.parts[String(i)] = segs;
+      Object.assign(t, info);
+      t.segments = Object.keys(t.parts).sort((a, b) => a - b).flatMap(k => t.parts[k]);
+      t.updated = new Date().toISOString();
+      this.transcript = t;
+      await this.write('transcript.json', JSON.stringify(t));
+    },
+    async finish() {
+      const t = this.transcript || { segments: [] };
+      await this.write('subtitles.vtt', vtt(t.segments, 2));
+      if (t.target && t.segments.some(g => g[3])) await this.write('subtitles.' + t.target + '.vtt', vtt(t.segments, 3));
+    },
+    chatText() { return this.chatFile ? this.chatFile.text() : null; },
+    saveChat(target, map) { return this.write('chat_translation.' + target + '.json', JSON.stringify({ target, map })); },
+    async fail() {},
+    doneText: 'Subtitles{chat} are saved in the folder. Open the folder in the PC player (player.html) to watch with them.',
+    playerUrl: () => null,
+  };
+
+  const B = LOCAL ? localBackend : serverBackend;
+
+  // ============================================================ reading the sound out of an MP4 (stand-alone mode)
+  // Finds the sound track's samples (normal and fragmented MP4), decodes them with the browser's own
+  // decoder (WebCodecs), mixes to mono and resamples to 16 kHz.
+  const fourcc = (dv, o) => String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3));
+  async function readAt(file, pos, len) { return new DataView(await file.slice(pos, pos + len).arrayBuffer()); }
+  function childBoxes(dv, start, end) {
+    const out = [];
+    let p = start;
+    while (p + 8 <= end) {
+      let size = dv.getUint32(p), hdr = 8;
+      const type = fourcc(dv, p + 4);
+      if (size === 1) { size = Number(dv.getBigUint64(p + 8)); hdr = 16; } else if (size === 0) size = end - p;
+      if (size < hdr || p + size > end) break;
+      out.push({ type, start: p, body: p + hdr, end: p + size });
+      p += size;
+    }
+    return out;
+  }
+  const find = (dv, box, type) => childBoxes(dv, box.body, box.end).find(b => b.type === type);
+  const findAll = (dv, box, type) => childBoxes(dv, box.body, box.end).filter(b => b.type === type);
+  const fullBody = b => b.body + 4; // skip version + flags
+
+  async function indexAudio(file, progress) {
+    // Top-level boxes: only their headers are read (mdat can be gigabytes).
+    const top = [];
+    for (let pos = 0; pos + 8 <= file.size;) {
+      const h = await readAt(file, pos, 16);
+      let size = h.getUint32(0), hdr = 8;
+      const type = fourcc(h, 4);
+      if (size === 1) { size = Number(h.getBigUint64(8)); hdr = 16; } else if (size === 0) size = file.size - pos;
+      if (size < 8) break;
+      top.push({ type, pos, size, hdr });
+      pos += size;
+    }
+    const mv = top.find(b => b.type === 'moov');
+    if (!mv) throw new Error('this file has no MP4 index (moov) - is the download or conversion complete?');
+    const dv = await readAt(file, mv.pos, mv.size);
+    const moov = { body: mv.hdr, end: mv.size };
+    let trak = null, mdia = null;
+    for (const t of findAll(dv, moov, 'trak')) {
+      const md = find(dv, t, 'mdia');
+      const hd = md && find(dv, md, 'hdlr');
+      if (hd && fourcc(dv, fullBody(hd) + 4) === 'soun') { trak = t; mdia = md; break; }
+    }
+    if (!trak) throw new Error('this video has no sound track');
+    const tkhd = find(dv, trak, 'tkhd');
+    const trackId = dv.getUint32(fullBody(tkhd) + (dv.getUint8(tkhd.body) === 1 ? 16 : 8));
+    const mdhd = find(dv, mdia, 'mdhd');
+    const timescale = dv.getUint32(fullBody(mdhd) + (dv.getUint8(mdhd.body) === 1 ? 16 : 8));
+    const stbl = find(dv, find(dv, mdia, 'minf'), 'stbl');
+    // Codec setup from the sample description.
+    const stsd = find(dv, stbl, 'stsd');
+    const entry = childBoxes(dv, fullBody(stsd) + 4, stsd.end)[0];
+    const channels = dv.getUint16(entry.body + 16), sampleRate = dv.getUint32(entry.body + 24) >>> 16;
+    const sub = childBoxes(dv, entry.body + 28, entry.end);
+    let codec, description;
+    if (entry.type === 'mp4a') {
+      const esds = sub.find(b => b.type === 'esds');
+      if (!esds) throw new Error('unsupported sound format (mp4a without esds)');
+      // Walk the ES descriptor to the DecoderSpecificInfo (tag 5) = AudioSpecificConfig.
+      let p = fullBody(esds), asc = null;
+      const len = () => { let n = 0, b; do { b = dv.getUint8(p++); n = (n << 7) | (b & 0x7f); } while (b & 0x80); return n; };
+      while (p < esds.end) {
+        const tag = dv.getUint8(p++), n = len();
+        if (tag === 3) { const fl = dv.getUint8(p + 2); p += 3 + (fl & 0x80 ? 2 : 0) + (fl & 0x40 ? 1 + dv.getUint8(p + 3) : 0) + (fl & 0x20 ? 2 : 0); }
+        else if (tag === 4) p += 13;
+        else if (tag === 5) { asc = new Uint8Array(dv.buffer, dv.byteOffset + p, n).slice(); break; }
+        else p += n;
+      }
+      if (!asc) throw new Error('unsupported sound format (no AAC config)');
+      let aot = asc[0] >> 3;
+      if (aot === 31) aot = 32 + (((asc[0] & 7) << 3) | (asc[1] >> 5));
+      codec = 'mp4a.40.' + aot; description = asc;
+    } else if (entry.type === 'Opus') {
+      const d = sub.find(b => b.type === 'dOps');
+      if (!d) throw new Error('unsupported sound format (Opus without dOps)');
+      const o = d.body, head = new Uint8Array(19), hv = new DataView(head.buffer);
+      head.set([79, 112, 117, 115, 72, 101, 97, 100]); // "OpusHead"
+      head[8] = 1; head[9] = dv.getUint8(o + 1);
+      hv.setUint16(10, dv.getUint16(o + 2), true); hv.setUint32(12, dv.getUint32(o + 4), true); hv.setInt16(16, dv.getInt16(o + 8), true);
+      head[18] = dv.getUint8(o + 10);
+      codec = 'opus'; description = head;
+    } else {
+      throw new Error('unsupported sound format: ' + entry.type + ' (AAC and Opus work)');
+    }
+    const cfg = { codec, sampleRate, numberOfChannels: channels, description };
+    const sup = await AudioDecoder.isConfigSupported(cfg).catch(() => ({ supported: false }));
+    if (!sup.supported) throw new Error('this browser can\'t decode ' + codec + ' sound');
+
+    // Sample list: file offsets, sizes and times (seconds).
+    const offs = [], sizes = [], times = [];
+    const stsz = find(dv, stbl, 'stsz');
+    const fixed = dv.getUint32(fullBody(stsz)), count = dv.getUint32(fullBody(stsz) + 4);
+    if (count > 0) {
+      for (let i = 0; i < count; i++) sizes.push(fixed || dv.getUint32(fullBody(stsz) + 8 + 4 * i));
+      const co = find(dv, stbl, 'stco') || find(dv, stbl, 'co64'), big = co.type === 'co64';
+      const nc = dv.getUint32(fullBody(co)), chunkOff = [];
+      for (let i = 0; i < nc; i++) chunkOff.push(big ? Number(dv.getBigUint64(fullBody(co) + 4 + 8 * i)) : dv.getUint32(fullBody(co) + 4 + 4 * i));
+      const stsc = find(dv, stbl, 'stsc'), ns = dv.getUint32(fullBody(stsc)), runs = [];
+      for (let i = 0; i < ns; i++) runs.push([dv.getUint32(fullBody(stsc) + 4 + 12 * i), dv.getUint32(fullBody(stsc) + 8 + 12 * i)]);
+      let s = 0, r = 0;
+      for (let c = 0; c < nc && s < count; c++) {
+        while (r + 1 < runs.length && c + 1 >= runs[r + 1][0]) r++;
+        let o = chunkOff[c];
+        for (let j = 0; j < runs[r][1] && s < count; j++, s++) { offs.push(o); o += sizes[s]; }
+      }
+      const stts = find(dv, stbl, 'stts'), ne = dv.getUint32(fullBody(stts));
+      let t = 0;
+      for (let i = 0; i < ne; i++) {
+        const n = dv.getUint32(fullBody(stts) + 4 + 8 * i), d = dv.getUint32(fullBody(stts) + 8 + 8 * i);
+        for (let j = 0; j < n && times.length < count; j++) { times.push(t / timescale); t += d; }
+      }
+    } else {
+      // Fragmented MP4 (the recorder's default): samples are described in moof boxes all through the file.
+      let defDur = 0, defSize = 0;
+      const mvex = find(dv, moov, 'mvex');
+      if (mvex) for (const tx of findAll(dv, mvex, 'trex')) {
+        if (dv.getUint32(fullBody(tx)) === trackId) { defDur = dv.getUint32(fullBody(tx) + 8); defSize = dv.getUint32(fullBody(tx) + 12); }
+      }
+      const moofs = top.filter(b => b.type === 'moof');
+      let k = 0, lastDt = 0;
+      for (const mf of moofs) {
+        if (++k % 200 === 0) { progress(k / moofs.length); await sleep(0); }
+        const fv = await readAt(file, mf.pos, mf.size);
+        const moof = { body: mf.hdr, end: mf.size };
+        for (const traf of findAll(fv, moof, 'traf')) {
+          const tfhd = find(fv, traf, 'tfhd');
+          const fl = fv.getUint32(tfhd.body) & 0xffffff;
+          let p = fullBody(tfhd);
+          if (fv.getUint32(p) !== trackId) continue;
+          p += 4;
+          let base = mf.pos, dDur = defDur, dSize = defSize;
+          if (fl & 0x01) { base = Number(fv.getBigUint64(p)); p += 8; }
+          if (fl & 0x02) p += 4;
+          if (fl & 0x08) { dDur = fv.getUint32(p); p += 4; }
+          if (fl & 0x10) { dSize = fv.getUint32(p); p += 4; }
+          const tfdt = find(fv, traf, 'tfdt');
+          let dt = tfdt ? (fv.getUint8(tfdt.body) === 1 ? Number(fv.getBigUint64(fullBody(tfdt))) : fv.getUint32(fullBody(tfdt))) : lastDt;
+          let next = base;
+          for (const trun of findAll(fv, traf, 'trun')) {
+            const tf = fv.getUint32(trun.body) & 0xffffff;
+            let q = fullBody(trun);
+            const n = fv.getUint32(q); q += 4;
+            let o = next;
+            if (tf & 0x01) { o = base + fv.getInt32(q); q += 4; }
+            if (tf & 0x04) q += 4;
+            for (let i = 0; i < n; i++) {
+              let d = dDur, sz = dSize;
+              if (tf & 0x100) { d = fv.getUint32(q); q += 4; }
+              if (tf & 0x200) { sz = fv.getUint32(q); q += 4; }
+              if (tf & 0x400) q += 4;
+              if (tf & 0x800) q += 4;
+              offs.push(o); sizes.push(sz); times.push(dt / timescale);
+              o += sz; dt += d;
+            }
+            next = o;
+          }
+          lastDt = dt;
+        }
+      }
+    }
+    if (!times.length) throw new Error('no sound found in this video');
+    progress(1);
+    const t0 = times[0], last = times[times.length - 1];
+    return { cfg, codec, sampleRate, offs, sizes, times, t0, duration: last - t0 + 1024 / sampleRate };
+  }
+
+  /** Decodes the sound between two times (seconds) to mono 16 kHz. */
+  async function decodeRange(file, ix, from, to) {
+    let i;
+    { let lo = 0, hi = ix.times.length; while (lo < hi) { const m = (lo + hi) >> 1; if (ix.times[m] < from) lo = m + 1; else hi = m; } i = lo; }
+    const parts = [];
+    let rate = ix.sampleRate, total = 0, err = null;
+    const dec = new AudioDecoder({
+      output: ad => {
+        try {
+          rate = ad.sampleRate;
+          const n = ad.numberOfFrames, ch = ad.numberOfChannels, mono = new Float32Array(n), tmp = new Float32Array(n);
+          for (let c = 0; c < ch; c++) {
+            ad.copyTo(tmp, { planeIndex: c, format: 'f32-planar' });
+            for (let j = 0; j < n; j++) mono[j] += tmp[j] / ch;
+          }
+          parts.push(mono); total += n;
+        } catch (e) { err = e; }
+        ad.close();
+      },
+      error: e => { err = e; },
+    });
+    dec.configure(ix.cfg);
+    // Read the file in windows of 16 MB (sound and video are interleaved; fast on a local disk).
+    let wStart = -1, wBuf = null, sent = 0;
+    for (; i < ix.times.length && ix.times[i] < to; i++) {
+      const o = ix.offs[i], sz = ix.sizes[i];
+      if (!wBuf || o < wStart || o + sz > wStart + wBuf.byteLength) {
+        wStart = o;
+        wBuf = new Uint8Array(await file.slice(o, Math.min(file.size, o + Math.max(16 * 1048576, sz))).arrayBuffer());
+      }
+      dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: Math.round(ix.times[i] * 1e6), data: wBuf.subarray(o - wStart, o - wStart + sz) }));
+      if (++sent % 2000 === 0) await dec.flush();
+      if (err) throw new Error('decoding the sound failed: ' + err.message);
+    }
+    await dec.flush();
+    dec.close();
+    if (err) throw new Error('decoding the sound failed: ' + err.message);
+    if (!total) return new Float32Array(0);
+    const all = new Float32Array(total);
+    let p = 0;
+    for (const a of parts) { all.set(a, p); p += a.length; }
+    if (rate === 16000) return all;
+    // The browser's own resampler: good quality and fast.
+    const ctx = new OfflineAudioContext(1, Math.ceil(total * 16000 / rate), 16000);
+    const buf = ctx.createBuffer(1, total, rate);
+    buf.copyToChannel(all, 0);
+    const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination); src.start();
+    return (await ctx.startRendering()).getChannelData(0);
+  }
+
+  // ============================================================ translation (built into Chrome/Edge)
   const translators = {}; // source language -> Translator
   let detector = null;
   /** Creates the translators needed right away; must run during the Start click (Chrome may need to download a language pack). */
@@ -183,12 +568,17 @@
     if (!t) return '';
     try { return (await t.translate(text)).trim(); } catch (e) { return ''; }
   }
+  async function translateSegs(segs, spoken) {
+    const out = [];
+    for (const g of segs) out.push(g[3] ? g : [g[0], g[1], g[2], await translateText(spoken, g[2])]);
+    return out;
+  }
 
-  // ------------------------------------------------------------ speech recognition (Whisper, in the browser)
+  // ============================================================ speech recognition (Whisper, in the browser)
   let asr = null;
   async function loadModel(q) {
     if (TEST) { asr = TEST.asr; return; }
-    step('Loading the speech library…', 0);
+    modelLine('Speech model: loading the library…');
     const tf = await import(LIB);
     tf.env.allowLocalModels = false;
     const m = MODELS[q];
@@ -197,7 +587,7 @@
       if (p.status === 'progress' && p.total) {
         files[p.file] = [p.loaded, p.total];
         const v = Object.values(files), got = v.reduce((a, x) => a + x[0], 0), all = v.reduce((a, x) => a + x[1], 0);
-        step('Downloading the speech model (only the first time)…', 100 * got / all, (got / 1048576).toFixed(0) + ' of ' + (all / 1048576).toFixed(0) + ' MB');
+        modelLine('Speech model: downloading (only the first time) ' + (got / 1048576).toFixed(0) + ' of ' + (all / 1048576).toFixed(0) + ' MB');
       }
     };
     const f16 = gpu && gpu.features && gpu.features.has('shader-f16');
@@ -208,15 +598,19 @@
     for (const t of tries) {
       try {
         asr = await tf.pipeline('automatic-speech-recognition', m.id, Object.assign({ progress_callback: progress }, t));
-        log(m.name + ' loaded (' + (t.device === 'webgpu' ? 'graphics card' : 'processor') + ')', 'ok');
+        const where = t.device === 'webgpu' ? 'graphics card' : 'processor';
+        modelLine('Speech model: ' + m.name + ', ready on the ' + where);
+        log(m.name + ' loaded (' + where + ')', 'ok');
         return;
       } catch (e) { last = e; log('Could not load ' + m.name + ' on the ' + (t.device === 'webgpu' ? 'graphics card' : 'processor') + ': ' + e.message, 'warn'); }
     }
+    modelLine('Speech model: could not be loaded');
     throw new Error('the speech model could not be loaded (' + (last && last.message) + ')');
   }
 
   /** One sound piece -> subtitle lines [[start, end, text], ...] in video time. */
   async function transcribePiece(samples, offset, end, spoken) {
+    if (!samples.length) return [];
     const out = await asr(samples, { language: spoken, task: 'transcribe', return_timestamps: true, chunk_length_s: 29, stride_length_s: 5 });
     const segs = [];
     let prev = '', rep = 0;
@@ -233,27 +627,29 @@
     return segs;
   }
 
-  async function decodePiece(buf) {
-    // Decoded straight to mono 16 kHz, what Whisper expects.
-    const ctx = new OfflineAudioContext(1, 16000, 16000);
-    const ab = await ctx.decodeAudioData(buf);
-    return ab.getChannelData(0);
-  }
-
-  // ------------------------------------------------------------ the run
-  let running = false, wake = null, stopFlag = false;
+  // ============================================================ the run
+  let running = false, wake = null;
   async function keepAwake() { try { if (navigator.wakeLock && document.visibilityState === 'visible') wake = await navigator.wakeLock.request('screen'); } catch (e) {} }
   document.addEventListener('visibilitychange', () => { if (running && document.visibilityState === 'visible') keepAwake(); });
   window.addEventListener('beforeunload', e => { if (running) { e.preventDefault(); e.returnValue = ''; } });
 
+  (async () => {
+    const probs = await checkBrowser();
+    if (probs.length) notice(probs.join(' '), 'warn');
+    try { await B.init(); }
+    catch (e) { notice('Could not reach the dashboard: ' + e.message, 'bad'); $('#startBtn').disabled = true; }
+  })();
+
   $('#startBtn').addEventListener('click', async () => {
     const spoken = $('#spoken').value, target = $('#target').value, q = $('#quality').value, chat = $('#chatTr').checked;
-    try { localStorage.setItem(prefKey, JSON.stringify({ spoken, target, quality: q, chat })); localStorage.setItem('scan-prefs', JSON.stringify({ spoken, target, quality: q, chat })); } catch (e) {}
+    const p = JSON.stringify({ spoken, target, quality: q, chat });
+    try { localStorage.setItem(prefKey, p); localStorage.setItem('scan-prefs', p); } catch (e) {}
     $('#startBtn').disabled = true;
+    if (LOCAL) $('#pickBtn').disabled = true;
     $('#progress').hidden = false;
     $('#actions').replaceChildren();
     notice('');
-    running = true; stopFlag = false;
+    running = true;
     keepAwake();
     try {
       // Translators first: Chrome only downloads a language pack right after a click.
@@ -274,89 +670,85 @@
     const a = $('#actions'); a.replaceChildren();
     notice('The scan stopped: ' + msg, 'bad');
     const again = el('button', 'primary', 'Try again'); again.onclick = () => { notice(''); $('#startBtn').disabled = false; $('#startBtn').click(); };
-    const give = el('button', null, 'Give up (a YouTube upload goes ahead without it)');
-    give.onclick = async () => { try { await api('fail', { error: msg }); notice('Given up. The recording is uploaded as usual if YouTube upload is on.', 'warn'); a.replaceChildren(); } catch (e) { notice(e.message, 'bad'); } };
-    a.append(again, give);
+    a.append(again);
+    if (!LOCAL) {
+      const give = el('button', null, 'Give up (a YouTube upload goes ahead without it)');
+      give.onclick = async () => { try { await B.fail(msg); notice('Given up. The recording is uploaded as usual if YouTube upload is on.', 'warn'); a.replaceChildren(); } catch (e) { notice(e.message, 'bad'); } };
+      a.append(give);
+    } else {
+      $('#pickBtn').disabled = false;
+    }
   }
 
   async function run(spoken, target, q, chat) {
-    await refreshStatus();
-    const tr = status.transcript;
-    let saved = tr.parts || {};
+    const prev = await B.saved();
+    let saved = prev.parts;
     // Saved pieces only count when they were made the same way.
-    if (Object.keys(saved).length && (tr.language !== spoken || tr.model !== MODELS[q].id)) {
+    if (Object.keys(saved).length && (prev.language !== spoken || prev.model !== MODELS[q].id)) {
       log('Earlier pieces were made with another language or quality - starting over', 'warn');
       saved = {};
     }
-    let pieces = status.pieces;
     const savedCount = Object.keys(saved).length;
-    const allSaved = savedCount && status.scan.pieces && savedCount >= status.scan.pieces;
-    const loading = allSaved ? Promise.resolve() : loadModel(q); // meanwhile the server can prepare the sound
+    const allSaved = savedCount && prev.count && savedCount >= prev.count;
+    const loading = allSaved ? Promise.resolve() : loadModel(q); // meanwhile the sound is prepared
     loading.catch(() => {});
-    if (!allSaved && !pieces.length) {
-      if (!ACTIVE.includes(status.scan.state)) { await api('request'); log('Asked the server to prepare the sound'); }
-      pieces = await waitForSound();
-    }
-    const total = allSaved ? status.scan.pieces : pieces.length;
+    const pieces = await B.pieces(!allSaved);
+    const total = allSaved ? prev.count : pieces.length;
+    const info = { language: spoken, target: '', model: MODELS[q].id, pieces: total };
     const t0 = performance.now();
     let doneSecs = 0, workSecs = 0;
-    const totalSecs = pieces.length ? pieces[pieces.length - 1][2] : (SRC.seconds || 1);
+    const totalSecs = pieces.length ? pieces[pieces.length - 1][2] - pieces[0][1] : 1;
 
     for (let i = 0; i < total; i++) {
-      if (stopFlag) throw new Error('stopped');
-      const key = String(i);
-      const [file, start, end] = pieces[i] || [null, 0, 0];
-      if (saved[key]) {
-        let segs = saved[key];
+      const piece = pieces[i] || [null, 0, 0];
+      const [, start, end] = piece;
+      const canTr = !!(target && translators[spoken]);
+      info.target = canTr ? target : '';
+      if (saved[String(i)]) {
+        let segs = saved[String(i)];
         // Already scanned: only add a missing translation.
-        if (target && translators[spoken] && segs.some(g => !g[3])) {
+        if (canTr && segs.some(g => !g[3])) {
           step('Translating piece ' + (i + 1) + ' of ' + total + '…', 100 * i / total);
           segs = await translateSegs(segs, spoken);
-          await api('save', { part: i, segments: segs, language: spoken, target, model: MODELS[q].id, pieces: total });
         }
+        await B.save(i, segs, info);
         showPreview(segs);
         continue;
       }
+      step('Piece ' + (i + 1) + ' of ' + total + ': ' + (LOCAL ? 'reading' : 'downloading') + ' sound…', 100 * i / total, clock(start) + ' – ' + clock(end));
+      const samples = await B.samples(i, piece);
       await loading;
-      step('Piece ' + (i + 1) + ' of ' + total + ': downloading sound…', 100 * i / total, clock(start) + ' – ' + clock(end));
-      const r = await fetch(SRC.files + encodeURIComponent('audio/' + file), { credentials: 'same-origin', cache: 'no-store' });
-      if (!r.ok) throw new Error('could not download sound piece ' + (i + 1) + ' (HTTP ' + r.status + ')');
-      const samples = await decodePiece(await r.arrayBuffer());
       const w0 = performance.now();
-      step('Piece ' + (i + 1) + ' of ' + total + ': recognising speech…', 100 * (i + 0.15) / total, eta(doneSecs, workSecs, totalSecs) );
+      step('Piece ' + (i + 1) + ' of ' + total + ': recognising speech…', 100 * (i + 0.15) / total, eta(doneSecs, workSecs, totalSecs));
       let segs = await transcribePiece(samples, start, end, spoken);
-      if (target && translators[spoken]) {
+      if (canTr) {
         step('Piece ' + (i + 1) + ' of ' + total + ': translating…', 100 * (i + 0.85) / total, eta(doneSecs, workSecs, totalSecs));
         segs = await translateSegs(segs, spoken);
       }
-      await api('save', { part: i, segments: segs, language: spoken, target: translators[spoken] ? target : '', model: MODELS[q].id, pieces: total });
+      await B.save(i, segs, info);
       workSecs += (performance.now() - w0) / 1000;
       doneSecs += end - start;
       log('Piece ' + (i + 1) + ' of ' + total + ' saved: ' + segs.length + ' lines (' + clock(start) + ' – ' + clock(end) + ')');
       showPreview(segs);
     }
     step('Saving subtitles…', 100);
-    await api('finish');
-    log('Subtitles saved' + (target && translators[spoken] ? ' (' + langName(spoken) + ' and ' + langName(target) + ')' : ''), 'ok');
-    running = false; // the part that holds the YouTube upload is done
+    await B.finish();
+    log('Subtitles saved' + (info.target ? ' (' + langName(spoken) + ' and ' + langName(target) + ')' : ''), 'ok');
+    running = false; // the part that holds a YouTube upload is done
 
     let chatNote = '';
     if (chat && target) chatNote = await translateChat(target);
     step('Done', 100, 'Took ' + Math.max(1, Math.round((performance.now() - t0) / 60000)) + ' min');
-    notice('Done. Subtitles' + (chatNote ? ' and ' + chatNote : '') + ' are saved with the recording; spoken-word moments are added at the next cron run, before a YouTube upload.', 'ok');
-    if (SRC.player) { const p = el('a', null, '▶ Open in the player'); p.href = SRC.player; $('#actions').prepend(p); }
+    notice('Done. ' + B.doneText.replace('{chat}', chatNote ? ' and ' + chatNote : ''), 'ok');
+    const url = B.playerUrl();
+    if (url) { const pl = el('a', null, '▶ Open in the player'); pl.href = url; $('#actions').prepend(pl); }
+    if (LOCAL) { $('#pickBtn').disabled = false; $('#startBtn').disabled = false; }
   }
 
   function eta(doneSecs, workSecs, totalSecs) {
     if (!doneSecs || !workSecs) return '';
     const speed = doneSecs / workSecs;
     return speed.toFixed(1) + '× real time · ~' + Math.max(1, Math.round((totalSecs - doneSecs) / speed / 60)) + ' min left';
-  }
-
-  async function translateSegs(segs, spoken) {
-    const out = [];
-    for (const g of segs) out.push(g[3] ? g : [g[0], g[1], g[2], await translateText(spoken, g[2])]);
-    return out;
   }
 
   function showPreview(segs) {
@@ -370,29 +762,14 @@
     p.scrollTop = p.scrollHeight;
   }
 
-  async function waitForSound() {
-    const t0 = Date.now();
-    for (;;) {
-      await refreshStatus();
-      const s = status.scan;
-      if (status.pieces.length && s.state !== 'preparing' && s.state !== 'requested') return status.pieces;
-      if (s.state === 'failed') throw new Error('the server could not prepare the sound: ' + (s.error || 'unknown'));
-      if (s.state === 'cancelled') throw new Error('the scan was cancelled on the dashboard');
-      const mins = Math.floor((Date.now() - t0) / 60000);
-      step(s.state === 'preparing' ? 'The server is preparing the sound…' : 'Waiting for the server (it starts at its next cron run)…', null,
-        (s.note ? s.note + ' · ' : '') + (mins ? mins + ' min so far' : ''));
-      await sleep(TEST ? 300 : 10000);
-    }
-  }
-
-  // ------------------------------------------------------------ chat translation
+  // ============================================================ chat translation
   async function translateChat(target) {
     step('Translating chat: reading messages…', 0);
-    const r = await fetch(SRC.files + 'chat.txt', { credentials: 'same-origin', cache: 'no-store' });
-    if (!r.ok) { log('Could not load the chat (HTTP ' + r.status + ')', 'warn'); return ''; }
+    const text = await B.chatText();
+    if (!text) { log('No chat to translate', 'warn'); return ''; }
     const texts = new Set();
     const re = /^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?\] (.*)$/;
-    for (const line of (await r.text()).split(/\r?\n/)) {
+    for (const line of text.split(/\r?\n/)) {
       const m = re.exec(line); if (!m) continue;
       let body = m[1], txt = body;
       if (body.startsWith('** ')) continue; // notices from Twitch itself
@@ -435,7 +812,7 @@
       const out = await translateText(src, txt);
       if (out && out !== txt) { map[txt] = out; translated++; }
     }
-    await api('chat', { target, map });
+    await B.saveChat(target, map);
     log('Chat: ' + translated + ' messages translated (of ' + list.length + ' different ones) in ' + Math.max(1, Math.round((performance.now() - t0) / 1000)) + ' s', 'ok');
     const miss = Object.entries(missing).sort((a, b) => b[1] - a[1]);
     if (miss.length) {

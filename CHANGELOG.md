@@ -2,6 +2,15 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.3.1] - 2026-11-24
+
+### Added
+- **Stand-alone PC scan: `pc-tools/scan.html`.** The same scan page, opened from disk: choose a recording folder on your PC, and it reads the sound straight from the MP4 file in the browser (AAC or Opus; normal and fragmented MP4) and writes subtitles, translations and translated chat into that folder for the PC player. For older footage that's not on the server. Resumable per 10-minute piece, like the dashboard version.
+
+### Changed
+- **The sound for a PC scan is also prepared while a stream records**, at `CONVERT_SPEED` (half the normal speed) to leave room for the recording. With `CONVERT_SPEED` 0 it still waits until nothing records.
+- **The scan page says why it's waiting** (a stream is recording, a conversion is running, or the next cron run), and shows the speech model's download and status on a separate line.
+
 ## [1.3.0] - 2026-11-24
 
 ### Added
@@ -81,6 +90,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.3.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.0.0...v1.1.0

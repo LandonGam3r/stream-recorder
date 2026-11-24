@@ -1,6 +1,6 @@
 # PC tools
 
-Two optional tools for your own computer. Both also work on their own, without the recorder.
+Three optional tools for your own computer. All of them also work on their own, without the recorder.
 
 ## Stream player (`player.html`)
 Plays a recording with its chat in sync - chat in a separate pop-up window you can put on a second screen, or docked next to the video.
@@ -17,8 +17,20 @@ Extras:
 - **Chat sync −/+** nudges chat if it feels early or late (remembered per recording).
 - A−/A+ in the pop-up changes the text size.
 - Keys: Space/K = play/pause, ←/→ = 5 s, M = mute, F = fullscreen (or double-click), C = pop out/dock chat.
+- After a PC scan: a subtitles menu next to the speed control, and a **Translated** button in the chat bar.
 
 Nothing is uploaded anywhere - the files are only read by your browser. `.ts` files can't play in browsers; recordings converted by the server are `.mp4`.
+
+## PC scan (`scan.html`): subtitles and translation
+Makes subtitles of what the streamer says, translated subtitles and a translated chat, for any MP4 on your PC, such as older recordings or footage from elsewhere. It's the same page the dashboard uses, but it reads the sound straight from the video file, so nothing goes through your server. More in [docs/pc-scan.md](../docs/pc-scan.md).
+
+1. Double-click `scan.html` in Chrome or Edge (desktop, version 138+) → **Choose folder** → pick a folder with one recording: an `.mp4`, `.m4v` or `.mov`, and optionally `chat.txt`.
+2. Choose the language spoken, what to translate to, and the quality → **Start scan**. The first time, the speech model downloads (about 300 MB on *Good*); the browser keeps it.
+3. The results are written into that folder: `subtitles.vtt`, `subtitles.<language>.vtt`, `chat_translation.<language>.json` and `transcript.json`. Open the folder in `player.html` to watch with them.
+
+- **Pausing is safe:** it saves after every 10 minutes of sound. Close the tab, choose the same folder later, and it continues.
+- **Formats:** AAC and Opus sound in normal and fragmented MP4 (what the recorder makes). `.ts` and `.mkv` don't work: convert to MP4 first (`ffmpeg -i video.ts -c copy video.mp4`).
+- **Spoken-word moments:** those are for YouTube uploads from the server. The stand-alone scan doesn't use the moments rules.
 
 ## YouTube uploader (`yt_uploader.py`)
 

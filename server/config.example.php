@@ -87,7 +87,8 @@ define('UPLOAD_CHUNK_MB', 16);
 
 // When a streamer's "PC scan" setting is "ask", its YouTube upload waits for your Scan/Skip choice
 // and for the scan itself. After this many hours without an answer or progress it uploads anyway.
-// The sound for the scan is cut at 2 x CONVERT_SPEED (only reading counts towards the IO limit).
+// The sound for the scan is cut at 2 x CONVERT_SPEED (only reading counts towards the IO limit), or at
+// CONVERT_SPEED while a stream records (with CONVERT_SPEED 0 it then waits until nothing records).
 define('SCAN_WAIT_HOURS', 24);
 
 // ---------------------------------------------------------------- logging
