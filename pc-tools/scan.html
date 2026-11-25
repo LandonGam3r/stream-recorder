@@ -20,7 +20,8 @@
   header { padding: 18px 24px; border-bottom: 1px solid var(--line); }
   header h1 { font-size: 17px; margin: 0; font-weight: 650; }
   header .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
-  main { max-width: 760px; margin: 0 auto; padding: 20px 24px 48px; display: grid; gap: 16px; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 24px 48px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  #preview, #log, #detail, #model, #step, .msg, #what { overflow-wrap: anywhere; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
   .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
   .grid { display: grid; grid-template-columns: 180px 1fr; gap: 10px 14px; align-items: center; }
@@ -250,8 +251,18 @@
       return r.ok ? r.text() : null;
     },
     saveChat(target, map) { return this.api('chat', { target, map }); },
+    saveText(text) { return this.api('text', { text }); },
+    async segments() {
+      await this.refresh();
+      const p = this.status.transcript.parts || {};
+      return Object.keys(p).sort((a, b) => a - b).flatMap(k => p[k]);
+    },
+    async meta() {
+      const r = await fetch(SRC.files + 'meta.json', { credentials: 'same-origin', cache: 'no-store' });
+      return r.ok ? r.json().catch(() => ({})) : {};
+    },
     fail(msg) { return this.api('fail', { error: msg }); },
-    doneText: 'Subtitles{chat} are saved with the recording; spoken-word moments are added at the next cron run, before a YouTube upload.',
+    doneText: 'Subtitles{chat} and a readable text version (transcript.txt) are saved with the recording; spoken-word moments are added at the next cron run, before a YouTube upload.',
     playerUrl: () => SRC.player,
   };
 
@@ -284,6 +295,7 @@
         const m = /^#META (.*)$/m.exec(await this.chatFile.slice(0, 4096).text());
         if (m) { try { meta = Object.assign(JSON.parse(m[1]), meta); } catch (e) {} }
       }
+      this.metaInfo = meta;
       try { this.transcript = JSON.parse(await (await (await dir.getFileHandle('transcript.json')).getFile()).text()); } catch (e) { this.transcript = null; }
       notice('');
       showWhat({ channel: meta.channel, title: meta.title || this.video.name, started: meta.stream_started, seconds: meta.recorded_seconds });
@@ -331,8 +343,11 @@
     },
     chatText() { return this.chatFile ? this.chatFile.text() : null; },
     saveChat(target, map) { return this.write('chat_translation.' + target + '.json', JSON.stringify({ target, map })); },
+    saveText(text) { return this.write('transcript.txt', text); },
+    async segments() { return (this.transcript && this.transcript.segments) || []; },
+    async meta() { return this.metaInfo || {}; },
     async fail() {},
-    doneText: 'Subtitles{chat} are saved in the folder. Open the folder in the PC player (player.html) to watch with them.',
+    doneText: 'Subtitles{chat} and a readable text version (transcript.txt) are saved in the folder. Open the folder in the PC player (player.html) to watch with them.',
     playerUrl: () => null,
   };
 
@@ -630,8 +645,12 @@
     const segs = [];
     let prev = '', rep = 0;
     for (const c of out.chunks || []) {
-      const text = (c.text || '').trim();
+      let text = (c.text || '').trim();
       if (!text || /^[\[(].*[\])]$/.test(text)) continue;          // [Music], (silence), [BLANK_AUDIO]
+      // Whisper sometimes "loops" on noise or music: the same few characters or words over and over.
+      text = text.replace(/(\p{L}.{0,29}?)(?:\s*\1){4,}/gu, '$1 $1 …').replace(/ {2,}/g, ' ').trim();
+      if (text.length > 400) text = text.slice(0, 400) + ' …';
+      if (/(\S)\1{15,}/u.test(text)) continue;                     // one character repeated, e.g. aaaaaaaaaaaaaaaa
       rep = text === prev ? rep + 1 : 0; prev = text;
       if (rep >= 2) continue;                                       // the model repeating itself on silence
       let s = offset + (c.timestamp && c.timestamp[0] != null ? c.timestamp[0] : 0);
@@ -752,9 +771,10 @@
     running = false; // the part that holds a YouTube upload is done
 
     let chatNote = '';
-    if (chat && target) chatNote = await translateChat(target);
+    if (chat && target) chatNote = await translateChat(target, spoken);
+    else await writeText(spoken, target, null);
     step('Done', 100, 'Took ' + Math.max(1, Math.round((performance.now() - t0) / 60000)) + ' min');
-    notice('Done. ' + B.doneText.replace('{chat}', chatNote ? ' and ' + chatNote : ''), 'ok');
+    notice('Done. ' + B.doneText.replace('{chat}', chatNote ? ', ' + chatNote : ''), 'ok');
     const url = B.playerUrl();
     if (url) { const pl = el('a', null, '▶ Open in the player'); pl.href = url; $('#actions').prepend(pl); }
     if (LOCAL) { $('#pickBtn').disabled = false; $('#startBtn').disabled = false; }
@@ -804,11 +824,70 @@
     p.scrollTop = p.scrollHeight;
   }
 
+  // ============================================================ readable text: streamer + chat, with translations
+  function parseLocal(s) {
+    const m = /^(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d):(\d\d)(?:\.(\d{1,3}))?/.exec(s || '');
+    return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6], +(m[7] || '0').padEnd(3, '0')).getTime() : null;
+  }
+  /** Chat clock time -> seconds into the video (same as the player, incl. the cuts for ad breaks). */
+  function chatMapper(meta, firstMs) {
+    const tl = (meta.timeline || []).map(([v, t]) => [v, parseLocal(t)]).filter(x => x[1] != null);
+    const start = meta.video_start ? parseLocal(meta.video_start) : firstMs;
+    if (!tl.length) return ms => (ms - start) / 1000;
+    return ms => {
+      let i = 0;
+      while (i + 1 < tl.length && tl[i + 1][1] <= ms) i++;
+      let t = tl[i][0] + (ms - tl[i][1]) / 1000;
+      if (i + 1 < tl.length) t = Math.min(t, tl[i + 1][0]);
+      return t;
+    };
+  }
+  async function writeText(spoken, target, chatMap) {
+    try {
+      const segs = await B.segments();
+      const chatText = await B.chatText();
+      let meta = Object.assign({}, await B.meta());
+      const hm = chatText && /^#META (.*)\r?\n/.exec(chatText);
+      if (hm) { try { meta = Object.assign(JSON.parse(hm[1]), meta); } catch (e) {} }
+      const who = meta.channel || (SRC && SRC.channel) || 'Streamer';
+      const rows = segs.map(g => [g[0], 0, who + ' (spoken)', g[2], g[3] || '']);
+      if (chatText) {
+        const re = /^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?)\] (.*)$/;
+        let map = null;
+        for (const line of chatText.split(/\r?\n/)) {
+          const m = re.exec(line); if (!m) continue;
+          const ms = parseLocal(m[1]);
+          if (!map) map = chatMapper(meta, ms);
+          let body = m[2], name = '', txt = body;
+          if (body.startsWith('** ')) { name = '(Twitch)'; txt = body.slice(3); }
+          else if (body.startsWith('* ')) { const p = body.slice(2).indexOf(' '); name = body.slice(2, 2 + p); txt = body.slice(3 + p); }
+          else { const p = body.indexOf(': '); if (p > 0 && p < 40) { name = body.slice(0, p); txt = body.slice(p + 2); } }
+          rows.push([Math.max(0, map(ms)), 1, name, txt, (chatMap && chatMap[txt]) || '']);
+        }
+      }
+      rows.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      const out = [
+        'Stream Recorder™ transcript',
+        [who, meta.title].filter(Boolean).join(' – '),
+        [(meta.stream_started || '').slice(0, 16), meta.recorded_seconds ? clock(meta.recorded_seconds) : ''].filter(Boolean).join(' · '),
+        'Spoken: ' + langName(spoken) + (target ? ' · translations (→) in ' + langName(target) : ''),
+        'Times are positions in the video. "' + who + ' (spoken)" lines come from speech recognition and can contain mistakes.',
+        '',
+      ];
+      for (const [t, , name, text, tr] of rows) {
+        out.push('[' + clock(t) + '] ' + (name ? name + ': ' : '') + text);
+        if (tr && tr !== text) out.push('            → ' + tr);
+      }
+      await B.saveText(out.join('\n') + '\n');
+      log('Text version saved: transcript.txt (' + segs.length + ' spoken lines' + (chatText ? ' + chat' : '') + ')', 'ok');
+    } catch (e) { log('Could not write the text version: ' + e.message, 'warn'); }
+  }
+
   // ============================================================ chat translation
-  async function translateChat(target) {
+  async function translateChat(target, spoken) {
     step('Translating chat: reading messages…', 0);
     const text = await B.chatText();
-    if (!text) { log('No chat to translate', 'warn'); return ''; }
+    if (!text) { log('No chat to translate', 'warn'); await writeText(spoken, target, null); return ''; }
     const texts = new Set();
     const re = /^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?\] (.*)$/;
     for (const line of text.split(/\r?\n/)) {
@@ -824,7 +903,7 @@
     if (!list.length) return '';
     if (!detector && !TEST) { log('No language detection in this browser - chat not translated', 'warn'); return ''; }
     const map = {}, missing = {};
-    let n = 0, translated = 0;
+    let n = 0, translated = 0, unsure = 0;
     const t0 = performance.now();
     for (const txt of list) {
       if (++n % 200 === 0) {
@@ -833,10 +912,13 @@
       }
       let src;
       try {
-        const res = TEST ? TEST.detect(txt) : await detector.detect(txt);
-        const top = res && res[0];
-        if (!top || top.confidence < 0.7 || top.detectedLanguage === 'und') continue;
-        src = top.detectedLanguage.split('-')[0];
+        const res = (TEST ? TEST.detect(txt) : await detector.detect(txt)) || [];
+        const top = res[0], base = r => String(r.detectedLanguage || '').split('-')[0];
+        if (top && top.confidence >= 0.7 && base(top) !== 'und') src = base(top);
+        // Chat messages are short, so detection is often unsure: if the stream's own language is among
+        // the likely ones, use that (a message that was already in the target language comes back unchanged).
+        else if (spoken && res.slice(0, 3).some(r => base(r) === spoken && r.confidence >= 0.05)) src = spoken;
+        else { unsure++; continue; }
       } catch (e) { continue; }
       if (src === target) continue;
       if (!(src in translators)) {
@@ -855,7 +937,8 @@
       if (out && out !== txt) { map[txt] = out; translated++; }
     }
     await B.saveChat(target, map);
-    log('Chat: ' + translated + ' messages translated (of ' + list.length + ' different ones) in ' + Math.max(1, Math.round((performance.now() - t0) / 1000)) + ' s', 'ok');
+    log('Chat: ' + translated + ' messages translated (of ' + list.length + ' different ones' + (unsure ? '; ' + unsure + ' skipped, language unclear' : '') + ') in ' + Math.max(1, Math.round((performance.now() - t0) / 1000)) + ' s', 'ok');
+    await writeText(spoken, target, map);
     const miss = Object.entries(missing).sort((a, b) => b[1] - a[1]);
     if (miss.length) {
       log('Not translated (no language pack yet): ' + miss.map(([l, k]) => langName(l) + ' ' + k).join(', '), 'warn');
@@ -865,7 +948,7 @@
         for (const [l] of miss) {
           try { translators[l] = await Translator.create({ sourceLanguage: l, targetLanguage: target }); } catch (e) { log('No translator for ' + langName(l), 'warn'); }
         }
-        await translateChat(target);
+        await translateChat(target, spoken);
         b.remove();
       };
       $('#actions').append(b);

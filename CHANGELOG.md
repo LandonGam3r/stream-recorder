@@ -2,6 +2,20 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.4.0] - 2026-11-25
+
+### Added
+- **Readable text version of a scan: `transcript.txt`.** Everything the streamer said and the whole chat, in order, with times in the video and the translation (→) under each line. It's linked as *text version* on the recording's line on the dashboard. The stand-alone scan writes it into the folder; *Download to this PC, then play* takes it along.
+
+### Fixed
+- **Chat translation translated hardly anything.** Chat messages are short, so Chrome's language detection is rarely sure about them, and the scan skipped every message it wasn't at least 70% sure of. Now, when the stream's own language is among the likely ones, the message is translated from that language. The scan log also says how many messages were skipped. Scan a recording again to redo its chat; the speech part is reused, so only the chat is translated again.
+- **Scan page stretched wider than the window** when speech recognition produced one very long "word" (a glitch on noise or music). Long text now wraps.
+- **Speech-recognition glitches are cleaned up:** the same word or phrase repeated over and over is cut to two times plus "…", runs of one repeated character are dropped, and very long lines are cut.
+
+### Changed
+- **The player's *Translated* button** shows how many chat messages have a translation, and says so when there are none.
+- **The PC player's file picker** also accepts `.vtt` subtitle files.
+
 ## [1.3.3] - 2026-11-24
 
 ### Changed
@@ -103,6 +117,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.4.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.0...v1.3.1

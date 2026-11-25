@@ -461,7 +461,7 @@ if (!function_exists('mb_substr')) { function mb_substr($s, $start, $len = null)
 function file_type(string $name): ?string
 {
     $fixed = ['video.mp4' => 'video/mp4', 'chat.txt' => 'text/plain; charset=utf-8', 'meta.json' => 'application/json',
-              'transcript.json' => 'application/json'];
+              'transcript.json' => 'application/json', 'transcript.txt' => 'text/plain; charset=utf-8'];
     if (isset($fixed[$name])) return $fixed[$name];
     if (preg_match('/^subtitles(\.[a-z]{2,3}(-[A-Za-z]{2,4})?)?\.vtt$/', $name)) return 'text/vtt; charset=utf-8';
     if (preg_match('/^chat_translation\.[a-z]{2,3}(-[A-Za-z]{2,4})?\.json$/', $name)) return 'application/json';
@@ -478,6 +478,7 @@ function scan_outputs(string $d): array
     foreach (glob("$d/subtitles.*.vtt") ?: [] as $f) {
         if (preg_match('/^subtitles\.([a-z]{2,3}(?:-[A-Za-z]{2,4})?)\.vtt$/', basename($f), $m)) $out[] = ['name' => basename($f), 'lang' => $m[1], 'kind' => 'subs'];
     }
+    if (is_file("$d/transcript.txt")) $out[] = ['name' => 'transcript.txt', 'lang' => '', 'kind' => 'text'];
     foreach (glob("$d/chat_translation.*.json") ?: [] as $f) {
         if (preg_match('/^chat_translation\.([a-z]{2,3}(?:-[A-Za-z]{2,4})?)\.json$/', basename($f), $m)) $out[] = ['name' => basename($f), 'lang' => $m[1], 'kind' => 'chat'];
     }
@@ -758,6 +759,14 @@ if (isset($_GET['scanapi'])) {
         if (strlen($json) > 20 * 1048576) action_fail(413, 'Translated chat is too large.');
         file_put_contents("$d/chat_translation.$target.json", $json, LOCK_EX);
         echo json_encode(['ok' => true, 'count' => count($clean)]);
+        exit;
+    }
+    if ($op === 'text') {
+        // Readable version: what the streamer said and the chat, in order, with translations.
+        $text = (string)($in['text'] ?? '');
+        if ($text === '' || strlen($text) > 30 * 1048576) action_fail(400, 'Bad data.');
+        file_put_contents("$d/transcript.txt", $text, LOCK_EX);
+        echo json_encode(['ok' => true]);
         exit;
     }
     if ($op === 'finish') {
@@ -1689,6 +1698,12 @@ if (isset($_GET['api'])) {
     const chat = sc.outputs.filter(o => o.kind === 'chat').map(o => langName(o.lang));
     if (subs.length) d.append(' · subtitles: ' + subs.join(', '));
     if (chat.length) d.append(' · chat in ' + chat.join(', '));
+    const txt = sc.outputs.find(o => o.kind === 'text');
+    if (txt) {
+      const l = el('a', null, 'text version'); l.href = '?ch=' + encodeURIComponent(c.name) + '&file=' + encodeURIComponent(r.folder) + '&name=transcript.txt';
+      l.target = '_blank'; l.rel = 'noopener'; l.title = 'What the streamer said and the chat, in order, with translations';
+      d.append(' · ', l);
+    }
     if (SCAN_ACTIVE.includes(sc.state)) {
       const x = el('button', 'linkbtn', 'cancel'); x.title = 'Stop this scan; a waiting YouTube upload goes ahead without it';
       x.onclick = () => scanAction('cancel', c.name, r.folder);

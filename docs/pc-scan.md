@@ -5,6 +5,7 @@ A web host can't run speech recognition, but your PC can, in the browser on its 
 - **subtitles** in the language the streamer speaks;
 - **translated subtitles**, for example from Dutch to English;
 - **translated chat** (optional), shown in the player with the *Translated* switch;
+- **a readable text version** (`transcript.txt`): what the streamer said and the chat, in order, with times and translations;
 - **spoken-word moments** for YouTube: the rule type *Streamer says* finds words the streamer said, like *Chat message contains* does for chat ([dashboard.md → YouTube moments](dashboard.md#youtube-moments)).
 
 ## Without the server: `pc-tools/scan.html`
@@ -60,6 +61,7 @@ While a scan is asked for or running, that recording's upload waits. It goes ahe
 
 - **Speech recognition makes mistakes.** It struggles with music, game sound, shouting, slang and several people talking at once. Moments from speech are only as good as the recognition.
 - **No language detection for speech:** pick the language the streamer speaks; it's remembered per streamer.
+- **Chat language detection:** chat messages are short, so the detector is often unsure. Then the scan assumes the stream's own language when that's one of the likely ones; messages that turn out to be in your language already stay as they are.
 - **Chat language packs:** chat in other languages is translated when Chrome already has that language pack. The scan page lists the rest and offers a button to download those packs and translate them too.
 - **Privacy:**
   - **The page loads two things from outside:** the speech library from jsDelivr and the model from Hugging Face. The scan page's security policy allows only those, and only on that page.

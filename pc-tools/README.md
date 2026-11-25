@@ -26,7 +26,7 @@ Makes subtitles of what the streamer says, translated subtitles and a translated
 
 1. Double-click `scan.html` in Chrome or Edge (desktop, version 138+) → **Choose folder** → pick a folder with one recording: an `.mp4`, `.m4v` or `.mov`, and optionally `chat.txt`.
 2. Choose the language spoken, what to translate to, and the quality → **Start scan**. The first time, the speech model downloads (about 300 MB on *Good*); the browser keeps it.
-3. The results are written into that folder: `subtitles.vtt`, `subtitles.<language>.vtt`, `chat_translation.<language>.json` and `transcript.json`. Open the folder in `player.html` to watch with them.
+3. The results are written into that folder: `subtitles.vtt`, `subtitles.<language>.vtt`, `chat_translation.<language>.json`, `transcript.json`, and `transcript.txt`, a readable version with the streamer and the chat in order, with translations. Open the folder in `player.html` to watch with them.
 
 - **Pausing is safe:** it saves after every 10 minutes of sound. Close the tab, choose the same folder later, and it continues.
 - **Formats:** AAC and Opus sound in normal and fragmented MP4 (what the recorder makes). `.ts` and `.mkv` don't work: convert to MP4 first (`ffmpeg -i video.ts -c copy video.mp4`).

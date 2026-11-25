@@ -161,7 +161,7 @@
   </div>
 </div>
 <input type="file" id="pickDir" webkitdirectory directory multiple>
-<input type="file" id="pickFiles" multiple accept="video/*,.mp4,.mkv,.webm,.mov,.ts,.txt,.json">
+<input type="file" id="pickFiles" multiple accept="video/*,.mp4,.mkv,.webm,.mov,.ts,.txt,.json,.vtt">
 <div id="toast"></div>
 
 <script>
@@ -428,9 +428,12 @@
     bar.append(inp, sel, mine, meToggle);
     if (chatTr) {
       const tb = doc.createElement('button'); tb.textContent = 'Translated'; tb.className = showTr ? 'on' : '';
-      tb.title = 'Show chat translated to ' + langName(chatTrLang) + ' (hover a message for the original)';
+      const have = messages.filter(m => chatTr[m.text]).length;
+      tb.title = have + ' of ' + messages.length + ' chat messages have a translation to ' + langName(chatTrLang) + ' (hover a translated message for the original)';
       tb.addEventListener('click', () => {
         showTr = !showTr;
+        if (showTr && !have) toast('None of this chat\'s messages have a translation yet. Scan the recording again (with "also translate the chat") to translate it.', 7000);
+        else toast(showTr ? 'Chat translated to ' + langName(chatTrLang) + ': ' + have + ' messages (hover one for the original)' : 'Chat in the original languages', 3000);
         try { localStorage.setItem('stream-player-chat-tr', showTr ? '1' : '0'); } catch (e) {}
         forEachBar(b => { const x = b.querySelector('button.trbtn'); if (x) x.className = 'trbtn' + (showTr ? ' on' : ''); });
         rebuild();
