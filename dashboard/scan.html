@@ -99,11 +99,16 @@
 <script type="module">
   const SRC = window.SCAN_SOURCE || null;  // set by the dashboard; absent when opened from disk
   const LOCAL = !SRC;
-  const LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
+  // From the dashboard: the speech library is a copy on your own server, pinned by checksum (import map).
+  // Opened from disk: straight from jsDelivr (no dashboard to protect there).
+  const LIB_BASE = SRC ? (SRC.lib ? new URL(SRC.lib, location.href).href : null) : 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/';
+  const LIB = LIB_BASE ? LIB_BASE + 'transformers.min.js' : null;
+  // "word" models give the time of every word, for subtitles that appear exactly when spoken; the plain
+  // ones are the fallback (one time per sentence, tidied up afterwards).
   const MODELS = {
-    base:  { id: 'onnx-community/whisper-base', name: 'Whisper base' },
-    small: { id: 'onnx-community/whisper-small', name: 'Whisper small' },
-    turbo: { id: 'onnx-community/whisper-large-v3-turbo', name: 'Whisper large-v3 turbo' },
+    base:  { id: 'onnx-community/whisper-base', word: 'onnx-community/whisper-base_timestamped', name: 'Whisper base' },
+    small: { id: 'onnx-community/whisper-small', word: 'onnx-community/whisper-small_timestamped', name: 'Whisper small' },
+    turbo: { id: 'onnx-community/whisper-large-v3-turbo', word: 'onnx-community/whisper-large-v3-turbo_timestamped', name: 'Whisper large-v3 turbo' },
   };
   const PIECE = 600; // seconds of sound per piece (same as the server)
   const LANGS = ['en', 'nl', 'de', 'fr', 'es', 'it', 'pt', 'pl', 'tr', 'ru', 'uk', 'sv', 'da', 'no', 'fi', 'cs', 'hu', 'ro', 'el', 'ja', 'ko', 'zh', 'ar', 'hi', 'id', 'vi', 'th'];
@@ -168,14 +173,46 @@
     return probs;
   }
 
-  // ------------------------------------------------------------ subtitles file (WebVTT)
+  // ------------------------------------------------------------ subtitles (same rules as the server's scan_tidy)
+  /** Removes "[Musik]", "*Music*", "♪" and similar sound tags. */
+  function stripTags(t) {
+    return String(t || '').replace(/[\[(*]\s*(?:musik|music|musique|música|muziek|musica|muzyka|BLANK_AUDIO)[^\])*]{0,20}[\])*]/giu, ' ')
+      .replace(/[♪♫]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  /** Each line on screen only as long as it takes to read (1.5-7 s), placed at the end of an over-long stretch. */
+  function tidy(segs) {
+    const out = [];
+    let prevEnd = 0;
+    for (const g of segs) {
+      const text = stripTags(g[2]);
+      if (!text) continue;
+      const tr = g[3] != null ? stripTags(g[3]) : '';
+      let s = +g[0], e = Math.max(+g[1], s + 0.5);
+      const need = Math.min(7, Math.max(1.5, [...text].length / 15 + 1));
+      if (e - s > need + 1) s = e - need;
+      s = Math.max(s, prevEnd);
+      if (e < s + 0.5) e = s + 0.5;
+      const row = [+s.toFixed(2), +e.toFixed(2), text];
+      if (tr) row.push(tr);
+      out.push(row);
+      prevEnd = e;
+    }
+    // Short lines stay up long enough to read, as far as the next line allows.
+    out.forEach((r, i) => {
+      const need = Math.min(7, Math.max(1.5, [...r[2]].length / 15 + 1));
+      const limit = i + 1 < out.length ? out[i + 1][0] : r[0] + need;
+      if (r[1] - r[0] < need) r[1] = +Math.max(r[1], Math.min(r[0] + need, limit)).toFixed(2);
+    });
+    return out;
+  }
   function vtt(segs, col) {
     const ts = t => { const ms = Math.round(Math.max(0, t) * 1000); return [Math.floor(ms / 3600000), Math.floor(ms / 60000) % 60, Math.floor(ms / 1000) % 60].map(x => String(x).padStart(2, '0')).join(':') + '.' + String(ms % 1000).padStart(3, '0'); };
     let out = 'WEBVTT\n\n', n = 0;
-    for (const g of segs) {
-      const text = String(g[col] || '').replace(/\r/g, '').replace(/-->/g, '->').replace(/\n{2,}/g, '\n').trim();
+    for (const g of tidy(segs)) {
+      const text = String(g[col] || '').replace(/\r/g, '').trim()
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/-->/g, '->').replace(/\n{2,}/g, '\n');
       if (!text) continue;
-      out += (++n) + '\n' + ts(g[0]) + ' --> ' + ts(Math.max(g[1], g[0] + 0.5)) + '\n' + text + '\n\n';
+      out += (++n) + '\n' + ts(g[0]) + ' --> ' + ts(g[1]) + '\n' + text + '\n\n';
     }
     return out;
   }
@@ -188,7 +225,7 @@
     status: null,
     async api(op, body) {
       const r = await fetch(SRC.api, { method: 'POST', credentials: 'same-origin', cache: 'no-store',
-        headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': SRC.token },
+        headers: { 'Content-Type': 'application/json', 'X-Scan-Key': SRC.key },
         body: JSON.stringify(Object.assign({ op, channel: SRC.channel, folder: SRC.folder }, body || {})) });
       const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status + (r.status === 404 ? ' (logged out? reload the dashboard)' : '') }));
       if (!j.ok) throw new Error(j.error || 'HTTP ' + r.status);
@@ -203,6 +240,16 @@
       if (st === 'done') $('#startHint').textContent = 'This recording was scanned before. Starting again reuses what is there for the same language and quality, and only adds what\'s missing (e.g. a new translation).';
       else if (done) $('#startHint').textContent = done + ' piece(s) were already scanned; it continues from there.';
       else if (st === 'preparing' || st === 'requested') $('#startHint').textContent = 'The server is preparing the sound; you can start already.' + (this.status.scan.note ? ' (' + this.status.scan.note + ')' : '');
+      if (!SRC.lib && !TEST) this.waitForLibrary();
+    },
+    /** First scan ever: the server downloads the speech library once (next cron run); then this page reloads. */
+    async waitForLibrary() {
+      $('#startBtn').disabled = true;
+      notice('Your server is downloading the speech library (once, about 25 MB) and pinning it by checksum. This page reloads by itself when it is ready, usually within two minutes.', 'warn');
+      for (;;) {
+        await sleep(10000);
+        try { const st = await this.api('status', { want_lib: true }); if (st.lib) { location.reload(); return; } } catch (e) {}
+      }
     },
     /** Earlier results: {parts, language, model, count} */
     async saved() {
@@ -588,10 +635,12 @@
     if (chat && 'LanguageDetector' in self) jobs.push(LanguageDetector.create().then(d => { detector = d; }).catch(e => log('Language detection unavailable: ' + e.message, 'warn')));
     await Promise.all(jobs);
   }
+  const trErrors = { n: 0, first: '' };
   async function translateText(src, text) {
     const t = translators[src];
     if (!t) return '';
-    try { return (await t.translate(text)).trim(); } catch (e) { return ''; }
+    try { return (await t.translate(text)).trim(); }
+    catch (e) { trErrors.n++; if (!trErrors.first) trErrors.first = e.message || String(e); return ''; }
   }
   async function translateSegs(segs, spoken) {
     const out = [];
@@ -600,12 +649,15 @@
   }
 
   // ============================================================ speech recognition (Whisper, in the browser)
-  let asr = null;
+  let asr = null, wordMode = false;
   async function loadModel(q) {
-    if (TEST) { if (TEST.loadDelay) await sleep(TEST.loadDelay); asr = TEST.asr; return; }
+    if (TEST) { if (TEST.loadDelay) await sleep(TEST.loadDelay); asr = TEST.asr; wordMode = !!TEST.word; return; }
+    if (!LIB) throw new Error('the speech library is not ready on the server yet - reload this page in a minute');
     modelLine('Speech model: loading the library…');
     const tf = await import(LIB);
     tf.env.allowLocalModels = false;
+    // The speech engine's own files come from the same place as the library (your server, when opened from the dashboard).
+    try { tf.env.backends.onnx.wasm.wasmPaths = LIB_BASE; } catch (e) {}
     const m = MODELS[q];
     const files = {};
     const progress = p => {
@@ -621,44 +673,85 @@
     };
     const f16 = gpu && gpu.features && gpu.features.has('shader-f16');
     if (q === 'turbo' && gpu && !f16) log('This graphics card has no 16-bit support in the browser, so "Best" needs its full-size version (about 2.7 GB)', 'warn');
-    const tries = gpu
+    const dev = gpu
       ? [{ device: 'webgpu', dtype: { encoder_model: q === 'turbo' && f16 ? 'fp16' : 'fp32', decoder_model_merged: 'q4' } }, { device: 'wasm', dtype: 'q8' }]
       : [{ device: 'wasm', dtype: 'q8' }];
+    const tries = [];
+    for (const d of dev) { tries.push([m.word, true, d]); tries.push([m.id, false, d]); }
     let last;
-    for (const t of tries) {
+    for (const [id, word, t] of tries) {
       try {
-        asr = await tf.pipeline('automatic-speech-recognition', m.id, Object.assign({ progress_callback: progress }, t));
+        asr = await tf.pipeline('automatic-speech-recognition', id, Object.assign({ progress_callback: progress }, t));
+        wordMode = word;
         const where = t.device === 'webgpu' ? 'graphics card' : 'processor';
-        modelLine('Speech model: ' + m.name + ', ready on the ' + where);
-        log(m.name + ' loaded (' + where + ')', 'ok');
+        modelLine('Speech model: ' + m.name + (word ? ' with word timing' : '') + ', ready on the ' + where);
+        log(m.name + (word ? ' (word timing)' : '') + ' loaded (' + where + ')', 'ok');
         return;
-      } catch (e) { last = e; log('Could not load ' + m.name + ' on the ' + (t.device === 'webgpu' ? 'graphics card' : 'processor') + ': ' + e.message, 'warn'); }
+      } catch (e) { last = e; log('Could not load ' + id.split('/')[1] + ' on the ' + (t.device === 'webgpu' ? 'graphics card' : 'processor') + ': ' + e.message, 'warn'); }
     }
     modelLine('Speech model: could not be loaded');
     throw new Error('the speech model could not be loaded (' + (last && last.message) + ')');
   }
 
+  /** Cleans one recognised line: loops ("ja ja ja ja ja …"), runaway length, sound tags. '' = drop it. */
+  function cleanLine(text) {
+    text = stripTags(String(text || '').trim());
+    if (!text || /^[\[(].*[\])]$/.test(text)) return '';              // [Applaus], (silence)
+    text = text.replace(/(\p{L}.{0,29}?)(?:\s*\1){4,}/gu, '$1 $1 …').replace(/ {2,}/g, ' ').trim();
+    if (text.length > 400) text = text.slice(0, 400) + ' …';
+    if (/(\S)\1{15,}/u.test(text)) return '';                         // one character repeated, e.g. aaaaaaaaaaaaaaaa
+    return text;
+  }
+
+  /** Words with their own times -> subtitle lines: a new line at a pause, at a sentence end, or when it gets long. */
+  function wordsToLines(words, offset, end) {
+    const lines = [];
+    let cur = null;
+    const flush = () => { if (cur && cur.text.trim()) lines.push(cur); cur = null; };
+    for (const w of words) {
+      const t = (w.text || '');
+      if (!t.trim() || !w.timestamp) continue;
+      const s = offset + (w.timestamp[0] ?? 0), e = offset + (w.timestamp[1] ?? (w.timestamp[0] ?? 0) + 0.4);
+      if (cur && (s - cur.e > 0.8 || cur.text.length + t.length > 84 || e - cur.s > 6.5 || (/[.!?…]$/.test(cur.text.trim()) && cur.text.length > 30))) flush();
+      if (!cur) cur = { s, e, text: '' };
+      cur.text += t;
+      cur.e = Math.max(cur.e, e);
+    }
+    flush();
+    return lines.map(l => [Math.min(l.s, end), Math.min(Math.max(l.e, l.s + 0.5), end + 1), l.text.trim()]);
+  }
+
   /** One sound piece -> subtitle lines [[start, end, text], ...] in video time. */
   async function transcribePiece(samples, offset, end, spoken) {
     if (!samples.length) return [];
-    const out = await asr(samples, { language: spoken, task: 'transcribe', return_timestamps: true, chunk_length_s: 29, stride_length_s: 5 });
+    let raw = null;
+    if (wordMode) {
+      try {
+        const out = await asr(samples, { language: spoken, task: 'transcribe', return_timestamps: 'word', chunk_length_s: 29, stride_length_s: 5 });
+        raw = wordsToLines(out.chunks || [], offset, end);
+      } catch (e) {
+        wordMode = false;
+        log('Word timing failed (' + e.message + ') - continuing with sentence timing', 'warn');
+      }
+    }
+    if (!raw) {
+      const out = await asr(samples, { language: spoken, task: 'transcribe', return_timestamps: true, chunk_length_s: 29, stride_length_s: 5 });
+      raw = (out.chunks || []).map(c => {
+        const s = offset + (c.timestamp && c.timestamp[0] != null ? c.timestamp[0] : 0);
+        const e = offset + (c.timestamp && c.timestamp[1] != null ? c.timestamp[1] : (c.timestamp ? c.timestamp[0] + 3 : 3));
+        return [Math.min(s, end), Math.min(Math.max(e, s + 0.5), end + 1), c.text];
+      });
+    }
     const segs = [];
     let prev = '', rep = 0;
-    for (const c of out.chunks || []) {
-      let text = (c.text || '').trim();
-      if (!text || /^[\[(].*[\])]$/.test(text)) continue;          // [Music], (silence), [BLANK_AUDIO]
-      // Whisper sometimes "loops" on noise or music: the same few characters or words over and over.
-      text = text.replace(/(\p{L}.{0,29}?)(?:\s*\1){4,}/gu, '$1 $1 …').replace(/ {2,}/g, ' ').trim();
-      if (text.length > 400) text = text.slice(0, 400) + ' …';
-      if (/(\S)\1{15,}/u.test(text)) continue;                     // one character repeated, e.g. aaaaaaaaaaaaaaaa
+    for (const [s, e, t] of raw) {
+      const text = cleanLine(t);
+      if (!text) continue;
       rep = text === prev ? rep + 1 : 0; prev = text;
       if (rep >= 2) continue;                                       // the model repeating itself on silence
-      let s = offset + (c.timestamp && c.timestamp[0] != null ? c.timestamp[0] : 0);
-      let e = offset + (c.timestamp && c.timestamp[1] != null ? c.timestamp[1] : (c.timestamp ? c.timestamp[0] + 3 : 3));
-      s = Math.min(s, end); e = Math.min(Math.max(e, s + 0.5), end + 1);
       segs.push([+s.toFixed(2), +e.toFixed(2), text]);
     }
-    return segs;
+    return tidy(segs);
   }
 
   // ============================================================ the run
@@ -718,7 +811,8 @@
     const prev = await B.saved();
     let saved = prev.parts;
     // Saved pieces only count when they were made the same way.
-    if (Object.keys(saved).length && (prev.language !== spoken || prev.model !== MODELS[q].id)) {
+    const family = id => String(id || '').replace(/_timestamped$/, '');
+    if (Object.keys(saved).length && (prev.language !== spoken || family(prev.model) !== MODELS[q].id)) {
       log('Earlier pieces were made with another language or quality - starting over', 'warn');
       saved = {};
     }
@@ -850,7 +944,7 @@
       const hm = chatText && /^#META (.*)\r?\n/.exec(chatText);
       if (hm) { try { meta = Object.assign(JSON.parse(hm[1]), meta); } catch (e) {} }
       const who = meta.channel || (SRC && SRC.channel) || 'Streamer';
-      const rows = segs.map(g => [g[0], 0, who + ' (spoken)', g[2], g[3] || '']);
+      const rows = tidy(segs).map(g => [g[0], 0, who + ' (spoken)', g[2], g[3] || '']);
       if (chatText) {
         const re = /^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?)\] (.*)$/;
         let map = null;
@@ -901,26 +995,26 @@
     }
     const list = [...texts];
     if (!list.length) return '';
-    if (!detector && !TEST) { log('No language detection in this browser - chat not translated', 'warn'); return ''; }
     const map = {}, missing = {};
-    let n = 0, translated = 0, unsure = 0;
+    let n = 0, translated = 0;
+    const count = { other: 0, stream: 0, target: 0, same: 0 };
+    const err0 = trErrors.n;
     const t0 = performance.now();
     for (const txt of list) {
       if (++n % 200 === 0) {
         step('Translating chat…', 100 * n / list.length, n + ' of ' + list.length + ' different messages · ' + translated + ' translated');
         await sleep(0);
       }
-      let src;
+      // Chat is short slang with emotes, which language detection rarely recognises. So every message is
+      // taken to be in the streamer's language, unless the detector is sure it's another one.
+      let src = spoken;
       try {
-        const res = (TEST ? TEST.detect(txt) : await detector.detect(txt)) || [];
-        const top = res[0], base = r => String(r.detectedLanguage || '').split('-')[0];
-        if (top && top.confidence >= 0.7 && base(top) !== 'und') src = base(top);
-        // Chat messages are short, so detection is often unsure: if the stream's own language is among
-        // the likely ones, use that (a message that was already in the target language comes back unchanged).
-        else if (spoken && res.slice(0, 3).some(r => base(r) === spoken && r.confidence >= 0.05)) src = spoken;
-        else { unsure++; continue; }
-      } catch (e) { continue; }
-      if (src === target) continue;
+        const res = TEST ? TEST.detect(txt) : (detector ? await detector.detect(txt) : []);
+        const top = (res || [])[0], lang = top ? String(top.detectedLanguage || '').split('-')[0] : '';
+        if (top && top.confidence >= 0.8 && lang && lang !== 'und') src = lang;
+      } catch (e) {}
+      if (src === target) { count.target++; continue; }
+      count[src === spoken ? 'stream' : 'other']++;
       if (!(src in translators)) {
         translators[src] = null;
         if (TEST) translators[src] = TEST.translator(src, target);
@@ -934,10 +1028,15 @@
       }
       if (!translators[src]) { missing[src] = (missing[src] || 0) + 1; continue; }
       const out = await translateText(src, txt);
-      if (out && out !== txt) { map[txt] = out; translated++; }
+      // Unchanged (e.g. an English message, or only names and emotes): nothing to show.
+      if (out && out.toLowerCase().replace(/\W+/g, '') !== txt.toLowerCase().replace(/\W+/g, '')) { map[txt] = out; translated++; }
+      else if (out) count.same++;
     }
     await B.saveChat(target, map);
-    log('Chat: ' + translated + ' messages translated (of ' + list.length + ' different ones' + (unsure ? '; ' + unsure + ' skipped, language unclear' : '') + ') in ' + Math.max(1, Math.round((performance.now() - t0) / 1000)) + ' s', 'ok');
+    log('Chat: ' + translated + ' of ' + list.length + ' different messages translated in ' + Math.max(1, Math.round((performance.now() - t0) / 1000)) + ' s ('
+      + count.stream + ' taken as ' + langName(spoken) + ', ' + count.other + ' recognised as another language, '
+      + count.target + ' already in ' + langName(target) + ', ' + count.same + ' unchanged by the translator)', 'ok');
+    if (trErrors.n > err0) log('The translator failed on ' + (trErrors.n - err0) + ' messages: ' + trErrors.first, 'warn');
     await writeText(spoken, target, map);
     const miss = Object.entries(missing).sort((a, b) => b[1] - a[1]);
     if (miss.length) {

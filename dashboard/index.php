@@ -7,6 +7,9 @@
  * Settings: config.php next to this file (copy config.example.php) - all optional.
  */
 
+// PHP warnings go to the server's error log, never onto a page (they could show server paths).
+@ini_set('display_errors', '0');
+
 // ============================ SETTINGS ============================
 if (is_file(__DIR__ . '/config.php')) require __DIR__ . '/config.php';
 foreach ([
@@ -39,7 +42,17 @@ header('Cache-Control: no-store');
 header('X-Frame-Options: DENY');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
-header("Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; img-src data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+// Only the app's own scripts run: each page load gets a random nonce that its <script> tags carry.
+$nonce = rtrim(strtr(base64_encode(random_bytes(18)), '+/', '-_'), '=');
+header("Content-Security-Policy: default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; img-src data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), display-capture=(), screen-wake-lock=(self)');
+header('Cross-Origin-Opener-Policy: same-origin');
+header('Cross-Origin-Resource-Policy: same-origin');
+/** Adds this page load's nonce to every <script> tag of a page we serve. */
+function with_nonce(string $html): string
+{
+    return preg_replace('/<script(?=[\s>])/', '<script nonce="' . $GLOBALS['nonce'] . '"', $html);
+}
 
 $tz = TIMEZONE !== '' ? TIMEZONE : (string)(json_decode((string)@file_get_contents(REC_DIR . '/recordings/.settings.json'), true)['timezone'] ?? '');
 if ($tz !== '' && in_array($tz, timezone_identifiers_list(), true)) date_default_timezone_set($tz);
@@ -96,6 +109,7 @@ if (https_forced()) {
 // ---------------------------------------------------------------- visitor address
 // Behind Cloudflare every request comes from a Cloudflare server; the visitor's own address is in
 // CF-Connecting-IP. That header is only trusted when the request really comes from Cloudflare.
+// List as published at https://www.cloudflare.com/ips/ (checked 2026-11-25; it rarely changes).
 const CLOUDFLARE_RANGES = [
     '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18',
     '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17',
@@ -139,11 +153,39 @@ if ($keyHash === '') {
     echo 'Dashboard not set up yet: the key is created by the next cron run of the new record.php.';
     exit;
 }
-$sessionValue = hash_hmac('sha256', 'recorder-dashboard-session', $keyHash); // cookie never contains the key
-$cookieName = 'recdash';
+// Login cookie = issue time + session generation, signed with a key derived from the dashboard key's
+// hash (it never contains the key). The server rejects it after COOKIE_DAYS, and "Log out everywhere"
+// raises the generation, which ends every other login at once.
+$cookieName = 'recdash2';
 $basePath = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/'))), '/') . '/';
+$sessFile = REC_DIR . '/secret/dashboard_session.json';
+function session_gen(): int
+{
+    $s = json_decode((string)@file_get_contents($GLOBALS['sessFile']), true);
+    return max(1, (int)($s['gen'] ?? 1));
+}
+function session_cookie_value(int $gen): string
+{
+    $payload = time() . '.' . $gen;
+    return $payload . '.' . hash_hmac('sha256', "recorder-dashboard-session|$payload", $GLOBALS['keyHash']);
+}
+function session_valid($v): bool
+{
+    if (!is_string($v) || !preg_match('/^(\d{9,12})\.(\d{1,9})\.([a-f0-9]{64})$/', $v, $m)) return false;
+    if (!hash_equals(hash_hmac('sha256', "recorder-dashboard-session|{$m[1]}.{$m[2]}", $GLOBALS['keyHash']), $m[3])) return false;
+    if ((int)$m[1] > time() + 300 || time() - (int)$m[1] > COOKIE_DAYS * 86400) return false;
+    return (int)$m[2] === session_gen();
+}
+function session_set(string $value, int $expires): void
+{
+    setcookie($GLOBALS['cookieName'], $value, [
+        'expires' => $expires, 'path' => $GLOBALS['basePath'],
+        'secure' => https_forced() || is_https(), 'httponly' => true, 'samesite' => 'Strict',
+    ]);
+}
+if (isset($_COOKIE['recdash'])) setcookie('recdash', '', ['expires' => 1, 'path' => $basePath]); // the old (pre-1.5) cookie
 
-$authed = isset($_COOKIE[$cookieName]) && is_string($_COOKIE[$cookieName]) && hash_equals($sessionValue, $_COOKIE[$cookieName]);
+$authed = session_valid($_COOKIE[$cookieName] ?? null);
 
 /**
  * Wrong-key counter per visitor (locked, so parallel requests can't skip counts; old entries are
@@ -197,7 +239,7 @@ function login_page(string $error = '', int $code = 200): void
 }
 
 if (!$authed) {
-    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi']));
+    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi', 'lib', 'logout', 'keyfile']));
     if (isset($_GET['api']) || isset($_GET['io'])) { // the open dashboard noticed it's logged out: reload shows the login form
         http_response_code(401);
         header('Content-Type: application/json');
@@ -215,10 +257,7 @@ if (!$authed) {
         if ($n >= MAX_FAILS) login_page("Too many wrong keys. Try again in $mins min.", 429);
         $key = $_POST['key'] ?? '';
         if (is_string($key) && strlen($key) <= 200 && hash_equals($keyHash, hash('sha256', trim($key)))) {
-            setcookie($cookieName, $sessionValue, [
-                'expires' => time() + COOKIE_DAYS * 86400, 'path' => $basePath,
-                'secure' => https_forced() || is_https(), 'httponly' => true, 'samesite' => 'Strict',
-            ]);
+            session_set(session_cookie_value(session_gen()), time() + COOKIE_DAYS * 86400);
             header('Location: ' . $basePath, true, 303);
             exit;
         }
@@ -358,6 +397,7 @@ function collect(): array
             'log' => array_slice(array_values(array_filter(tail_lines("$chanDir/recorder.log", 200),
                 function ($l) { return strpos($l, 'channel is offline, nothing to record') === false && strpos($l, 'Run skipped') === false; })), -25),
             'log_size' => (int)@filesize("$chanDir/recorder.log"),
+            'log_old_size' => (int)@filesize("$chanDir/recorder.log.1"),
             'recordings' => array_slice($recordings, 0, 30),
             'recording_count' => count($recordings),
             'listed' => isset($list[$name]),
@@ -432,6 +472,8 @@ function collect(): array
         'alerts' => array_slice(read_json("$rec/.notifications.json"), 0, 50),
         'disk' => ['recordings' => $totalBytes, 'free' => $free === false ? null : $free],
         'last_cron' => $lastRun[0] ?? null,
+        'key_file' => is_file(REC_DIR . '/secret/dashboard_key.txt') && is_file(REC_DIR . '/secret/dashboard_key.hash'),
+        'webroot_risk' => recorder_in_webroot(),
         'last_cron_age' => is_file(REC_DIR . '/last_run.txt') ? time() - filemtime(REC_DIR . '/last_run.txt') : null,
     ];
 }
@@ -566,7 +608,8 @@ if (isset($_GET['file'])) {
         $fn = preg_replace('/[^A-Za-z0-9_.-]/', '_', basename(dirname($d)) . '_' . basename($d) . '_' . basename($name));
         header('Content-Disposition: attachment; filename="' . $fn . '"');
     }
-    header('Cache-Control: private, max-age=3600');
+    // Video may stay in the browser's cache briefly for smooth seeking; text (chat, subtitles) never.
+    header($name === 'video.mp4' ? 'Cache-Control: private, max-age=600' : 'Cache-Control: no-store');
     if ($partial) {
         http_response_code(206);
         header("Content-Range: bytes $start-$end/$size");
@@ -616,13 +659,46 @@ if (isset($_GET['play'])) {
     header('Content-Type: text/html; charset=utf-8');
     $player = preg_replace('#</head>#', '<link rel="icon" type="image/png" href="' . FAVICON . '">' . "\n</head>", $player, 1);
     $pos = strpos($player, '<script>');
-    echo $pos === false ? $player : substr($player, 0, $pos) . $inject . substr($player, $pos);
+    echo with_nonce($pos === false ? $player : substr($player, 0, $pos) . $inject . substr($player, $pos));
     exit;
 }
 
 // ---------------------------------------------------------------- PC scan page
 // Runs on your PC, in the browser: downloads the sound pieces, recognises speech, translates, and sends
 // the text back via ?scanapi. Models come from Hugging Face (cached by the browser after the first time).
+/** The scan page's own key: works only for that recording's scan steps, for 24 hours (not the dashboard's action token). */
+function scan_key(string $ch, string $folder, ?int $exp = null): string
+{
+    $exp = $exp ?? time() + 86400;
+    return $exp . '.' . hash_hmac('sha256', "scan|$ch|$folder|$exp", $GLOBALS['keyHash']);
+}
+function scan_key_valid($key, string $ch, string $folder): bool
+{
+    if (!is_string($key) || !preg_match('/^(\d{9,12})\.[a-f0-9]{64}$/', $key, $m) || (int)$m[1] < time()) return false;
+    return hash_equals(scan_key($ch, $folder, (int)$m[1]), $key);
+}
+
+// ---------------------------------------------------------------- speech library files (pinned copy, see scan.php)
+if (isset($_GET['lib'])) {
+    if (!is_file(REC_DIR . '/scan.php')) not_found();
+    require_once REC_DIR . '/scan.php';
+    $m = speech_lib_manifest(REC_DIR);
+    $name = (string)$_GET['lib'];
+    if (!$m || !isset($m['files'][$name]) || !preg_match('/^[\w.-]+\.(js|mjs|wasm)$/', $name, $x)) not_found();
+    $path = speech_lib_dir(REC_DIR) . "/$name";
+    header('Content-Type: ' . ($x[1] === 'wasm' ? 'application/wasm' : 'text/javascript; charset=utf-8'));
+    header('Cache-Control: private, max-age=604800, immutable');
+    header('Content-Length: ' . filesize($path));
+    @set_time_limit(120);
+    while (ob_get_level()) ob_end_clean();
+    readfile($path);
+    exit;
+}
+
+// ---------------------------------------------------------------- PC scan page
+// Runs on your PC, in the browser: downloads the sound pieces, recognises speech, translates, and sends
+// the text back via ?scanapi. The speech library comes from this server (a pinned copy); only the
+// speech models come from Hugging Face (data, cached by the browser after the first time).
 if (isset($_GET['scan'])) {
     $d = recording_dir($_GET['ch'] ?? null, $_GET['scan']);
     if (!$d) not_found();
@@ -632,33 +708,58 @@ if (isset($_GET['scan'])) {
         echo 'scan.html is missing: upload it next to this index.php.';
         exit;
     }
+    $lib = null;
+    if (is_file(REC_DIR . '/scan.php')) {
+        require_once REC_DIR . '/scan.php';
+        $lib = speech_lib_manifest(REC_DIR);
+        if (!$lib) speech_lib_request(REC_DIR); // the next cron run downloads it (once)
+    }
     $meta = read_json("$d/meta.json");
     $self = strtok($_SERVER['REQUEST_URI'], '?');
+    $ch = (string)$_GET['ch'];
     $src = [
-        'channel' => (string)$_GET['ch'], 'folder' => basename($d),
+        'channel' => $ch, 'folder' => basename($d),
         'title' => (string)($meta['title'] ?? ''), 'started' => (string)($meta['stream_started'] ?? ''),
         'seconds' => (float)($meta['recorded_seconds'] ?? 0),
         'api' => $self . '?scanapi=1',
-        'files' => $self . '?ch=' . rawurlencode($_GET['ch']) . '&file=' . rawurlencode(basename($d)) . '&name=',
-        'player' => is_file("$d/video.mp4") ? $self . '?ch=' . rawurlencode($_GET['ch']) . '&play=' . rawurlencode(basename($d)) : null,
-        'token' => $csrf,
+        'files' => $self . '?ch=' . rawurlencode($ch) . '&file=' . rawurlencode(basename($d)) . '&name=',
+        'player' => is_file("$d/video.mp4") ? $self . '?ch=' . rawurlencode($ch) . '&play=' . rawurlencode(basename($d)) : null,
+        'key' => scan_key($ch, basename($d)),
         'has_chat' => is_file("$d/chat.txt"),
+        'lib' => $lib ? $self . '?lib=' : null, // null = the server is still downloading it
     ];
-    // This page loads the speech library from jsDelivr and the models from Hugging Face; nothing is sent there.
-    header("Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
-        . "style-src 'unsafe-inline'; connect-src 'self' https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co; "
+    // Import map: the browser refuses a library file whose checksum differs from the one recorded at download.
+    $importMap = '';
+    if ($lib) {
+        $integrity = [];
+        foreach ($lib['files'] as $name => $f) {
+            if (preg_match('/\.(m?js)$/', $name)) $integrity[$self . '?lib=' . $name] = 'sha256-' . $f['sha256'];
+        }
+        $importMap = '<script type="importmap">' . json_encode(['imports' => (object)[], 'integrity' => $integrity], JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) . '</script>';
+    }
+    header("Content-Security-Policy: default-src 'none'; script-src 'nonce-{$GLOBALS['nonce']}' 'strict-dynamic' 'wasm-unsafe-eval'; "
+        . "style-src 'unsafe-inline'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co; "
         . "media-src 'self' blob: data:; img-src data:; worker-src 'self' blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     header('Content-Type: text/html; charset=utf-8');
-    $inject = '<script>window.SCAN_SOURCE = ' . json_encode($src, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . ';</script>';
+    $inject = $importMap . '<script>window.SCAN_SOURCE = ' . json_encode($src, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . ';</script>';
     $page = preg_replace('#</head>#', '<link rel="icon" type="image/png" href="' . FAVICON . '">' . "\n</head>", $page, 1);
     $pos = strpos($page, '<script');
-    echo $pos === false ? $page : substr($page, 0, $pos) . $inject . substr($page, $pos);
+    echo with_nonce($pos === false ? $page : substr($page, 0, $pos) . $inject . substr($page, $pos));
     exit;
 }
 
 // ---------------------------------------------------------------- PC scan actions
 if (isset($_GET['scanapi'])) {
-    $in = check_action_request();
+    // From the dashboard: its action token. From the scan page: the scan-only key for that one recording.
+    header('Content-Type: application/json; charset=utf-8');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') action_fail(405, 'POST only');
+    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+    if ($origin !== '' && parse_url($origin, PHP_URL_HOST) !== parse_url('//' . ($_SERVER['HTTP_HOST'] ?? ''), PHP_URL_HOST)) action_fail(403, 'Wrong origin');
+    $in = json_decode((string)file_get_contents('php://input'), true) ?: [];
+    $viaDash = hash_equals($csrf, (string)($_SERVER['HTTP_X_DASHBOARD_TOKEN'] ?? ''));
+    if (!$viaDash && !scan_key_valid($_SERVER['HTTP_X_SCAN_KEY'] ?? null, (string)($in['channel'] ?? ''), (string)($in['folder'] ?? ''))) {
+        action_fail(403, 'This scan page has expired - open it again from the dashboard.');
+    }
     if (!is_file(REC_DIR . '/scan.php')) action_fail(409, 'scan.php is missing in the recorder folder: upload it next to record.php.');
     require_once REC_DIR . '/scan.php';
     $op = (string)($in['op'] ?? '');
@@ -675,7 +776,9 @@ if (isset($_GET['scanapi'])) {
     if ($op === 'status') {
         $s = scan_load($d);
         $tr = is_file("$d/transcript.json") ? read_json("$d/transcript.json") : [];
-        echo json_encode(['ok' => true, 'scan' => $s, 'pieces' => scan_audio_parts($d), 'prep' => scan_prep_progress($d, $s), 'now' => time(),
+        $libOk = (bool)speech_lib_manifest(REC_DIR);
+        if (!$libOk && !empty($in['want_lib'])) speech_lib_request(REC_DIR);
+        echo json_encode(['ok' => true, 'scan' => $s, 'pieces' => scan_audio_parts($d), 'prep' => scan_prep_progress($d, $s), 'now' => time(), 'lib' => $libOk,
             'transcript' => ['parts' => $tr['parts'] ?? (object)[], 'language' => $tr['language'] ?? null,
                 'target' => $tr['target'] ?? null, 'model' => $tr['model'] ?? null],
             'outputs' => scan_outputs($d)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -800,10 +903,11 @@ if (isset($_GET['log'])) {
     if ($ch === '_system') $f = REC_DIR . '/recordings/.system.log';
     elseif (preg_match('/^[a-z0-9_]{1,40}$/', $ch)) $f = REC_DIR . "/recordings/$ch/recorder.log";
     else not_found();
+    if (!empty($_GET['old'])) $f .= '.1'; // the part before the last rotation
     if (!is_file($f)) not_found();
     $quiet = !empty($_GET['quiet']); // leave out the routine "offline" / "run skipped" lines
     header('Content-Type: text/plain; charset=utf-8');
-    if (isset($_GET['dl'])) header('Content-Disposition: attachment; filename="' . ($ch === '_system' ? 'system' : $ch) . '-recorder.log"');
+    if (isset($_GET['dl'])) header('Content-Disposition: attachment; filename="' . ($ch === '_system' ? 'system' : $ch) . '-recorder' . (!empty($_GET['old']) ? '-older' : '') . '.log"');
     @set_time_limit(60);
     while (ob_get_level()) ob_end_clean();
     $h = fopen($f, 'rb');
@@ -844,6 +948,15 @@ function channels_update(callable $fn): void
     fclose($lk);
 }
 
+/** Is the recorder folder inside this website's folder (where its files might be downloadable)? */
+function recorder_in_webroot(): bool
+{
+    $root = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
+    $rec = realpath(REC_DIR);
+    if (!$root || !$rec) return false;
+    return strpos(rtrim($rec, '/') . '/', rtrim($root, '/') . '/') === 0;
+}
+
 function check_action_request(): array
 {
     header('Content-Type: application/json; charset=utf-8');
@@ -857,6 +970,35 @@ function action_fail(int $code, string $msg): void
 {
     http_response_code($code);
     echo json_encode(['ok' => false, 'error' => $msg]);
+    exit;
+}
+
+// ---------------------------------------------------------------- log out (this browser, or everywhere)
+if (isset($_GET['logout'])) {
+    $in = check_action_request();
+    if (($in['op'] ?? '') === 'all') {
+        $gen = session_gen() + 1;
+        @file_put_contents($GLOBALS['sessFile'], json_encode(['gen' => $gen, 'changed' => time()]), LOCK_EX);
+        @chmod($GLOBALS['sessFile'], 0600);
+        @file_put_contents(REC_DIR . '/recordings/.system.log', '[' . date('Y-m-d H:i:s') . "] Dashboard: logged out everywhere (all logins ended)\n", FILE_APPEND | LOCK_EX);
+    }
+    session_set('', 1);
+    echo json_encode(['ok' => true]);
+    exit;
+}
+
+// ---------------------------------------------------------------- delete the plain-text key copy
+if (isset($_GET['keyfile'])) {
+    $in = check_action_request();
+    $txt = REC_DIR . '/secret/dashboard_key.txt';
+    if (!is_file(REC_DIR . '/secret/dashboard_key.hash')) action_fail(409, 'The key\'s hash file is missing - keep the plain copy for now.');
+    if (is_file($txt)) {
+        @file_put_contents($txt, str_repeat('x', (int)filesize($txt)));
+        @unlink($txt);
+    }
+    if (is_file($txt)) action_fail(500, 'Could not delete secret/dashboard_key.txt - delete it by hand.');
+    @file_put_contents(REC_DIR . '/recordings/.system.log', '[' . date('Y-m-d H:i:s') . "] Dashboard: plain-text key copy deleted (only its hash remains)\n", FILE_APPEND | LOCK_EX);
+    echo json_encode(['ok' => true]);
     exit;
 }
 
@@ -1100,6 +1242,7 @@ if (isset($_GET['api'])) {
     echo json_encode(collect(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
+ob_start('with_nonce'); // every <script> of the page below gets this load's nonce
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1119,7 +1262,15 @@ if (isset($_GET['api'])) {
   header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--line); }
   header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
   .updated { color: var(--muted); font-size: 12px; }
-  main { padding: 20px 24px 40px; max-width: 1200px; margin: 0 auto; display: grid; gap: 18px; }
+  main { padding: 20px 24px 40px; max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  /* Long text without spaces (links, titles) wraps instead of widening the page on phones. */
+  main { overflow-wrap: anywhere; }
+  header h1 { overflow-wrap: normal; word-break: keep-all; }
+  .logout { display: inline-flex; gap: 6px; }
+  .notice { border-radius: 10px; padding: 12px 16px; font-size: 13px; display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .notice.bad { background: rgba(255,107,107,.1); border: 1px solid rgba(255,107,107,.4); color: var(--text); }
+  .notice.info { background: rgba(143,124,255,.08); border: 1px solid rgba(143,124,255,.35); }
+  .notice b { color: var(--text); }
   /* One row of tiles that share the width, however many there are */
   .strip { display: flex; flex-wrap: nowrap; gap: 12px; overflow-x: auto; }
   .tile { flex: 1 1 0; min-width: 120px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
@@ -1309,10 +1460,12 @@ if (isset($_GET['api'])) {
     <span class="chip" id="hToken"></span>
     <span class="chip" id="hCron"></span>
     <span class="updated" id="updated">Loading…</span>
+    <span class="logout"><button class="act" id="logoutBtn" title="Log out in this browser">Log out</button><button class="act" id="logoutAllBtn" title="End every login, on all your devices and browsers">Log out everywhere</button></span>
   </div>
 </header>
 <main>
   <div class="err" id="err"></div>
+  <div id="notices"></div>
   <div class="strip" id="strip"></div>
   <div id="io"></div>
   <div id="scanAsks"></div>
@@ -1724,6 +1877,30 @@ if (isset($_GET['api'])) {
     window.open('?ch=' + encodeURIComponent(channel) + '&scan=' + encodeURIComponent(folder), '_blank', 'noopener');
     if (request) scanAction('request', channel, folder);
   }
+  // ---- log out, and one-time notices
+  $('#logoutBtn').onclick = async () => { try { await post('?logout=1', { op: 'this' }); } catch (e) {} location.reload(); };
+  $('#logoutAllBtn').onclick = async () => {
+    if (!confirm('End every login to this dashboard, on all devices and browsers (including this one)?')) return;
+    try { await post('?logout=1', { op: 'all' }); } catch (e) {}
+    location.reload();
+  };
+  function renderNotices(data) {
+    const box = $('#notices'); box.replaceChildren();
+    if (data.webroot_risk) {
+      const n = el('div', 'notice bad');
+      n.append(el('span', null, 'The recorder folder is inside your website\'s folder. Recordings and the secret/ folder could be downloadable on servers that ignore .htaccess (e.g. nginx). Move it next to public_html (docs/install-webserver.md).'));
+      box.append(n);
+    }
+    if (data.key_file) {
+      const n = el('div', 'notice info');
+      n.append(el('span', null, 'A plain-text copy of your dashboard key is still on the server (secret/dashboard_key.txt). Once you have saved the key somewhere safe, delete that copy; logging in keeps working.'));
+      const b = el('button', 'act', 'I saved my key, delete the copy');
+      b.onclick = async () => { try { await post('?keyfile=1', {}); load(); } catch (e) { alert(e.message); } };
+      n.append(b);
+      box.append(n);
+    }
+  }
+
   function renderScanAsks(data) {
     const box = $('#scanAsks'); box.replaceChildren();
     const asks = [];
@@ -1787,6 +1964,7 @@ if (isset($_GET['api'])) {
   function render(data) {
     lastData = data;
     renderMoments(data);
+    renderNotices(data);
     renderScanAsks(data);
     const now = data.now;
     const freshAlerts = renderAlerts(data.alerts, now);
@@ -2028,6 +2206,11 @@ if (isset($_GET['api'])) {
         [['Full log', '&quiet=1', 'The whole log without the routine "offline" lines'], ['everything', '', 'The whole log, every line'], ['download', '&dl=1', 'Save the whole log as a file']]
           .forEach(([t, q, tip]) => { const a = el('a', null, t); a.href = '?log=' + encodeURIComponent(c.name) + q; a.target = '_blank'; a.rel = 'noopener'; a.title = tip; links.append(a); });
         links.append(el('span', 'muted', c.log_size < 1048576 ? Math.max(1, Math.round(c.log_size / 1024)) + ' KB' : mb(c.log_size)));
+        if (c.log_old_size) {
+          const o = el('a', null, 'older part'); o.href = '?log=' + encodeURIComponent(c.name) + '&old=1&quiet=1'; o.target = '_blank'; o.rel = 'noopener';
+          o.title = 'The log before its last rotation (' + mb(c.log_old_size) + ')';
+          links.append(o);
+        }
         lh.append(links);
       }
       log.append(lh);

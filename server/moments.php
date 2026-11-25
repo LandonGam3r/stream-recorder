@@ -146,7 +146,7 @@ function moments_scan(string $dir, array $rules, string $channel): array
                         $windows[$id] = [];
                     }
                 } else {
-                    $add($r, $t, $cut(($name !== '' ? "$name: " : '') . $text, 80));
+                    $add($r, $t, moments_chat_detail($name, $text, $cut));
                 }
             }
         }
@@ -182,11 +182,30 @@ function moments_title(string $base, array $labels): string
 }
 
 /** The "Moments" block for the YouTube description (timestamps become clickable on YouTube). */
+/** Links and e-mail addresses become "[link]": viewers' messages must not put links in your YouTube description. */
+function moments_unlink(string $s): string
+{
+    $s = preg_replace('~\b(?:https?://|www\.)\S+~iu', '[link]', $s) ?? $s;
+    $s = preg_replace('~\b[\w.+-]+@[\w-]+\.[\w.-]+\b~u', '[link]', $s) ?? $s;
+    // bare domains like "example.com/path"
+    $s = preg_replace('~\b[\w-]+(?:\.[\w-]+)*\.(?:com|net|org|de|nl|io|gg|tv|me|ly|co|uk|eu|info|xyz|ru|be|fr|app|link|shop|store)\b(?:/\S*)?~iu', '[link]', $s) ?? $s;
+    return $s;
+}
+
+/** What a chat moment shows: "name: message" (without links), or only the name when MOMENTS_QUOTE_CHAT is false. */
+function moments_chat_detail(string $name, string $text, callable $cut): string
+{
+    $quote = !defined('MOMENTS_QUOTE_CHAT') || MOMENTS_QUOTE_CHAT;
+    if (!$quote) return $name !== '' ? "message from $name" : 'chat';
+    return $cut(($name !== '' ? "$name: " : '') . moments_unlink($text), 80);
+}
+
 function moments_description(array $moments): string
 {
     if (!$moments) return '';
     $out = "Moments:\n";
     foreach (array_slice($moments, 0, 60) as [$t, $label, $detail]) {
+        $detail = moments_unlink((string)$detail);
         $out .= moments_clock((float)$t) . ' ' . $label . ($detail !== '' ? " ($detail)" : '') . "\n";
     }
     if (count($moments) > 60) $out .= '… and ' . (count($moments) - 60) . " more\n";

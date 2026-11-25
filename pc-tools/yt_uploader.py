@@ -293,8 +293,15 @@ def clean(text, limit):
     return b.decode("utf-8", "ignore")
 
 
+def unlink(text: str) -> str:
+    """Links and e-mail addresses become "[link]": chat messages must not put links in your description."""
+    text = re.sub(r"\b(?:https?://|www\.)\S+", "[link]", text, flags=re.I)
+    text = re.sub(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b", "[link]", text)
+    return re.sub(r"\b[\w-]+(?:\.[\w-]+)*\.(?:com|net|org|de|nl|io|gg|tv|me|ly|co|uk|eu|info|xyz|ru|be|fr|app|link|shop|store)\b(?:/\S*)?", "[link]", text, flags=re.I)
+
+
 def metadata_for(path: Path):
-    """Title/description: from the recorder's meta.json + summary.txt when present, else the file name.
+    """Title/description: from the recorder's meta.json when present, else the file name.
     "Moments" found by the recorder (dashboard rules) are added: labels to the title, timestamps to the description."""
     meta = load_json(path.parent / "meta.json", {})
     if meta.get("title") or meta.get("channel"):
@@ -311,20 +318,40 @@ def metadata_for(path: Path):
     if len(title) > room:
         title = title[:room - 1] + "…"
     title += suffix
-    desc = ""
+    # Public description: only what viewers should see. The recorder's summary.txt (server folder,
+    # cron runs, gaps) is internal and never goes to YouTube.
+    def clock(t):
+        t = int(max(0, round(float(t))))
+        return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}"
+    lines = []
+    if meta.get("channel") or meta.get("title"):
+        when = (meta.get("stream_started") or "")[:16]
+        lines.append(f"{meta.get('channel') or 'The streamer'} streamed on Twitch" + (f" on {when}." if when else "."))
+        if meta.get("title"):
+            lines.append("Title: " + meta["title"])
+        if meta.get("recorded_seconds"):
+            lines.append("Length: " + clock(meta["recorded_seconds"]))
+        games = []
+        for c in meta.get("changes") or []:
+            g = c.get("game") or ""
+            if g and (not games or games[-1][1] != g):
+                games.append((c.get("video") or 0, g))
+        if len(games) > 1:
+            lines += ["", "Categories:"] + [f"{clock(t)} {g}" for t, g in games]
+        elif meta.get("game"):
+            lines.append("Category: " + meta["game"])
+    desc = "\n".join(lines) + ("\n\n" if lines else "")
     moments = meta.get("moments") or []
     if moments:
-        lines = ["Moments:"]
+        mlines = ["Moments:"]
         for t, label, detail in moments[:60]:
-            t = int(round(float(t)))
-            lines.append(f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d} {label}" + (f" ({detail})" if detail else ""))
+            detail = unlink(str(detail or ""))
+            mlines.append(f"{clock(t)} {label}" + (f" ({detail})" if detail else ""))
         if len(moments) > 60:
-            lines.append(f"… and {len(moments) - 60} more")
-        desc += "\n".join(lines) + "\n\n"
-    if (path.parent / "summary.txt").exists():
-        desc = "Recorded Twitch stream.\n\n" + desc + (path.parent / "summary.txt").read_text(encoding="utf-8", errors="replace")
-    elif desc:
-        desc = "Recorded Twitch stream.\n\n" + desc
+            mlines.append(f"… and {len(moments) - 60} more")
+        desc += "\n".join(mlines) + "\n\n"
+    if desc:
+        desc += "Recorded with Stream Recorder\u2122\n"
     return title, clean(desc, 4900)
 
 

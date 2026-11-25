@@ -38,6 +38,14 @@ define('POLL_INTERVAL', 2);
 // recording starts within ~N seconds of going live. 0 = check once a minute (less server load).
 define('OFFLINE_CHECK_INTERVAL', 10);
 
+// Recording pauses while the disk (or your hosting quota) has less than this many GB free, and
+// continues by itself when there is room again; an alert warns at twice this value. 0 = no check.
+define('MIN_FREE_GB', 5);
+
+// Stop recording a stream after this many hours (the recording is finished as usual when the stream
+// ends; the rest is not recorded). 0 = no limit.
+define('MAX_RECORDING_HOURS', 0);
+
 // ---------------------------------------------------------------- Twitch token (optional)
 
 // Seconds between checks that your Twitch token still works (3600 = hourly). See docs/twitch-token.md.
@@ -83,6 +91,10 @@ define('YOUTUBE_CATEGORY', '20');
 define('UPLOAD_BUDGET', 45);
 define('UPLOAD_CHUNK_MB', 16);
 
+// YouTube moments that come from chat quote the message (links are always replaced by "[link]").
+// false = show only who wrote it, so nothing viewers type ends up in your description.
+define('MOMENTS_QUOTE_CHAT', true);
+
 // ---------------------------------------------------------------- PC scan
 
 // When a streamer's "PC scan" setting is "ask", its YouTube upload waits for your Scan/Skip choice
@@ -95,3 +107,6 @@ define('SCAN_WAIT_HOURS', 24);
 
 // true = log every run, including routine "offline" checks and handovers (useful while setting up).
 define('DEBUG', false);
+
+// A log larger than this (MB) becomes recorder.log.1 (one old copy is kept) and a new log starts.
+define('LOG_MAX_MB', 5);

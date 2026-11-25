@@ -29,6 +29,10 @@ Copy `server/config.example.php`.
 | `YOUTUBE_CATEGORY` | `'20'` | YouTube category id (20 = Gaming). |
 | `UPLOAD_BUDGET` | `45` | Seconds of uploading per run; the upload continues next run. |
 | `UPLOAD_CHUNK_MB` | `16` | Upload piece size. |
+| `MIN_FREE_GB` | `5` | Recording pauses while less than this many GB is free (disk or hosting quota) and continues by itself; an alert warns at twice this value. `0` = no check. |
+| `MAX_RECORDING_HOURS` | `0` | Stop recording a stream after this many hours (the recording is finished as usual when the stream ends). `0` = no limit. |
+| `MOMENTS_QUOTE_CHAT` | `true` | YouTube moments from chat quote the message (links become "[link]"). `false` = only the writer's name. |
+| `LOG_MAX_MB` | `5` | A log larger than this becomes `recorder.log.1` (one old copy kept) and a new log starts. |
 | `SCAN_WAIT_HOURS` | `24` | How long a YouTube upload waits for a PC scan you're asked about or running, without progress ([pc-scan.md](pc-scan.md)). |
 | `DEBUG` | `false` | Log every run, including routine offline checks and handovers. |
 

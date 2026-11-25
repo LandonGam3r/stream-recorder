@@ -11,6 +11,12 @@ Open the dashboard's address and paste the key from `secret/dashboard_key.txt` (
 
 ## Header
 
+- **Log out** ends the login in this browser. **Log out everywhere** ends every login, on all devices.
+- **Notices** under the header:
+  - **Key copy:** a reminder to delete the plain-text key copy once you've saved the key (button included).
+  - **Folder warning:** a red warning when the recorder folder is inside the website's folder.
+
+
 - **Twitch token**: working, not working, or not set (hover for details). Only relevant if you use the [token](twitch-token.md).
 - **Cron**: when the recorder last ran. It turns red when there has been no run for 3 minutes (the cron job or start script stopped).
 
@@ -71,7 +77,7 @@ Each recording shows its title, date, length, files, size and status. Running co
     - Each recording gets a subfolder with `video.mp4`, `chat.txt` and `meta.json`. It downloads in pieces with automatic retries, can be paused and continues where it stopped, then plays from your PC.
   - **Stream from the server**: plays right away, but can stutter on long or high-quality streams.
   - Other browsers get plain download links.
-- **Logs:** the *Recent log* box shows the last lines. *Full log* opens the whole log in a new tab, without the routine "offline" lines; *everything* includes them, and *download* saves it as a file.
+- **Logs:** the *Recent log* box shows the last lines. *Full log* opens the whole log in a new tab, without the routine "offline" lines; *everything* includes them, and *download* saves it as a file. A log rotates at `LOG_MAX_MB`; *older part* opens the previous one.
 - **YouTube** uploads a finished recording by hand, for example when the streamer's upload setting was off. Pick the account and press *Upload*:
   - It goes in the same queue as the automatic upload, with the same title, description and moments. It starts at the next cron run while nothing records.
   - A recording still waiting for its MP4 conversion is uploaded right after the conversion.

@@ -66,12 +66,13 @@ server/
   scan.php                   PC scan: prepares the sound, holds uploads, writes subtitles
   channels.json              streamer list (the dashboard edits it)
   moments.json               YouTube moments rules (the dashboard edits them)
+  speech-lib/<version>/      pinned copy of the PC scan's speech library + manifest.json (checksums)
   recordings/
     .notifications.json      alerts
     .io_history.json         IO graph data (24 h, per minute)
     .convert_queue.json, .upload_queue.json, .system.log, .settings.json
     <streamer>/
-      recorder.log, state.json
+      recorder.log (+ recorder.log.1 after rotation), state.json
       2026-11-17_150000_<streamid>/
         video.mp4            after conversion (parts/NNN.ts while recording)
         chat.txt             chat, first line = sync info

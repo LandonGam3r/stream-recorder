@@ -1,4 +1,9 @@
 <?php
+// Never run from a web request (and write nothing first): this is for cron / the command line only.
+if (PHP_SAPI !== 'cli' || isset($_SERVER['REQUEST_METHOD'])) {
+    http_response_code(403);
+    exit("Run this from cron / the command line.\n");
+}
 /**
  * Twitch live recorder - cron version (relay mode)
  *
@@ -46,6 +51,10 @@ foreach ([
     'UPLOAD_BUDGET'           => 45,
     'UPLOAD_CHUNK_MB'         => 16,
     'SCAN_WAIT_HOURS'         => 24,
+    'MIN_FREE_GB'             => 5,
+    'MAX_RECORDING_HOURS'     => 0,
+    'LOG_MAX_MB'              => 5,
+    'MOMENTS_QUOTE_CHAT'      => true,
     'DEBUG'                   => false,
 ] as $k => $v) {
     if (!defined($k)) define($k, $v);
@@ -72,10 +81,6 @@ if (@filesize(__DIR__ . '/last_run.txt') > 100000) {
     @file_put_contents(__DIR__ . '/last_run.txt', '');
 }
 
-if (isset($_SERVER['REQUEST_METHOD'])) {
-    http_response_code(403);
-    exit("Run this from cron / the command line.\n");
-}
 if (!function_exists('curl_init')) {
     exit("PHP cURL extension is required.\n");
 }
@@ -386,6 +391,7 @@ if ($chatBuffer) {
 $nextPoll   = 0.0;
 $fails      = 0;
 $firstFetch = true;
+$diskPaused = false; // free space below MIN_FREE_GB: segments are skipped until there is room again
 $runBytes   = 0;
 $exitReason = 'stream ended';
 $switchedOff = false;
@@ -440,8 +446,39 @@ while (true) {
                 }
             }
 
+            // Free space low: pause (the skipped part becomes a gap); resume when there is room again.
+            [$free, $low] = disk_low();
+            if ($low !== $diskPaused) {
+                $diskPaused = $low;
+                $newPart = true;
+                if ($low) {
+                    $msg = sprintf('Recording PAUSED: only %.1f GB free (MIN_FREE_GB = %s). It continues by itself when there is room again; delete old recordings to make room.', $free / 1073741824, MIN_FREE_GB);
+                    logmsg($msg);
+                    if (empty($state['disk_alerted'])) {
+                        alert("Recording paused - disk almost full ({$info['display']})", $msg . "\n", 'warning');
+                        $state['disk_alerted'] = true;
+                    }
+                } else {
+                    logmsg(sprintf('Recording RESUMED: %.1f GB free again', $free / 1073741824));
+                }
+            }
+            // Length cap: past MAX_RECORDING_HOURS the rest of the stream is not recorded.
+            $capped = MAX_RECORDING_HOURS > 0 && $state['seconds'] >= MAX_RECORDING_HOURS * 3600;
+            if ($capped && empty($state['capped'])) {
+                $state['capped'] = true;
+                $msg = sprintf('Recording stopped at %d hours (MAX_RECORDING_HOURS); the rest of this stream is not recorded. The recording is finished as usual when the stream ends.', MAX_RECORDING_HOURS);
+                logmsg($msg);
+                alert("Recording length cap reached ({$info['display']})", $msg . "\n", 'warning');
+            }
+
             foreach ($segs as $s) {
                 if ($s['seq'] <= $state['last_seq']) {
+                    continue;
+                }
+                if ($capped) { $state['last_seq'] = $s['seq']; continue; }
+                if ($diskPaused) {
+                    $state['last_seq'] = $s['seq'];
+                    $state['missing_segments']++;
                     continue;
                 }
                 if ($state['last_seq'] >= 0 && $s['seq'] > $state['last_seq'] + 1) {
@@ -508,7 +545,7 @@ while (true) {
     if ($chat) {
         $new = [];
         chat_collect($chat, $new, $wait);
-        if ($new) {
+        if ($new && empty($state['capped'])) {
             $state['chat_lines'] += write_chat($chatFile, $new, $state);
         }
     } else {
@@ -560,7 +597,44 @@ exit(0);
 
 function logmsg(string $msg): void
 {
-    file_put_contents($GLOBALS['logFile'], '[' . date('Y-m-d H:i:s') . "] $msg\n", FILE_APPEND);
+    $f = $GLOBALS['logFile'];
+    // Rotation: past LOG_MAX_MB the log becomes recorder.log.1 (one old copy kept) and a new one starts.
+    static $checked = [];
+    if (LOG_MAX_MB > 0 && (($checked[$f] ?? 0) + 60 < time())) {
+        $checked[$f] = time();
+        clearstatcache(true, $f);
+        if ((int)@filesize($f) > LOG_MAX_MB * 1048576) {
+            @rename($f, "$f.1");
+            @file_put_contents($f, '[' . date('Y-m-d H:i:s') . '] Log rotated: the previous part is ' . basename($f) . ".1\n", FILE_APPEND);
+        }
+    }
+    file_put_contents($f, '[' . date('Y-m-d H:i:s') . "] $msg\n", FILE_APPEND);
+}
+
+/**
+ * Text from Twitch (titles, categories, names, chat): without control characters and without the
+ * invisible characters that reverse the direction of text, so it can't fake log lines or flip what
+ * is shown in the dashboard, alerts or on YouTube.
+ */
+function clean_text(string $s): string
+{
+    if (function_exists('mb_check_encoding') && !mb_check_encoding($s, 'UTF-8')) {
+        $s = function_exists('mb_convert_encoding') ? mb_convert_encoding($s, 'UTF-8', 'UTF-8') : '';
+    }
+    $s = preg_replace('/[\x{202A}-\x{202E}\x{2066}-\x{2069}\x{200E}\x{200F}\x{061C}]/u', '', $s) ?? $s;
+    $s = preg_replace('/[\x00-\x08\x0B-\x1F\x7F]/', '', $s) ?? $s;
+    return trim(str_replace(["\r", "\n", "\t"], ' ', $s));
+}
+
+/** Free space check for recordings, at most once a minute per process: [bytes free or null, below MIN_FREE_GB]. */
+function disk_low(): array
+{
+    static $at = 0, $res = [null, false];
+    if (time() - $at < 60) return $res;
+    $at = time();
+    $free = free_space_bytes();
+    $res = [$free, MIN_FREE_GB > 0 && $free !== null && $free < MIN_FREE_GB * 1073741824];
+    return $res;
 }
 
 function load_state(): array
@@ -581,9 +655,14 @@ function save_state(array $state): void
 function http_request(string $url, ?string $post, array $headers, int $timeout, int &$code = 0): ?string
 {
     $ch = curl_init($url);
+    // Only https, and a request that carries a token never follows a redirect (to another site).
+    $hasToken = (bool)preg_grep('/^Authorization:/i', $headers);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_FOLLOWLOCATION => !$hasToken,
+        CURLOPT_MAXREDIRS      => 3,
+        CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
         CURLOPT_CONNECTTIMEOUT => 5,
         CURLOPT_TIMEOUT        => $timeout,
         CURLOPT_USERAGENT      => USER_AGENT,
@@ -632,7 +711,15 @@ function get_stream_info(string $login)
     );
     if ($d === null) return false;
     if (empty($d['user'])) return ['exists' => false];
-    return ['exists' => true, 'display' => $d['user']['displayName'], 'stream' => $d['user']['stream']];
+    $stream = $d['user']['stream'];
+    if (is_array($stream)) {
+        // Streamer-controlled text, cleaned before it goes anywhere (logs, alerts, meta.json, YouTube).
+        $stream['title'] = clean_text((string)($stream['title'] ?? ''));
+        if (isset($stream['game']['name'])) $stream['game']['name'] = clean_text((string)$stream['game']['name']);
+        $stream['id'] = preg_replace('/\D/', '', (string)($stream['id'] ?? '')) ?: '0';
+    }
+    $display = clean_text((string)$d['user']['displayName']);
+    return ['exists' => true, 'display' => preg_match('/^[\p{L}\p{N}_ ]{1,40}$/u', $display) ? $display : $login, 'stream' => $stream];
 }
 
 /**
@@ -1061,6 +1148,7 @@ function format_chat_line(string $raw): ?array
     if (!preg_match('/^:(\S+) (\S+) (\S+)(?: :(.*))?$/', $line, $m)) return null;
     $nick = strtok($m[1], '!');
     $name = ($tags['display-name'] ?? '') !== '' ? $tags['display-name'] : $nick;
+    if (!preg_match('/^[\p{L}\p{N}_]{1,40}$/u', $name)) $name = preg_replace('/[^a-z0-9_]/', '', strtolower((string)$nick)) ?: 'someone';
     $msg  = $m[4] ?? null;
 
     switch ($m[2]) {
@@ -1084,7 +1172,7 @@ function format_chat_line(string $raw): ?array
             return null;
     }
     $ts = isset($tags['tmi-sent-ts']) ? ((int)$tags['tmi-sent-ts']) / 1000 : time();
-    return ['id' => $tags['id'] ?? md5($raw), 'ts' => $ts, 'text' => $text];
+    return ['id' => $tags['id'] ?? md5($raw), 'ts' => $ts, 'text' => clean_text($text)];
 }
 
 // ---------------------------------------------------------------- token storage (encrypted)
@@ -1279,10 +1367,10 @@ function token_alert_text(string $detail): string
 }
 
 /** Every notification is kept for the dashboard's alert list (newest first, last 100). */
-function record_notification(string $subject, string $body): void
+function record_notification(string $subject, string $body, ?string $level = null): void
 {
-    $level = preg_match('/fail|stopped working|problem|shorter|reminder|not working|gave up|not enough|does not exist/i', $subject) ? 'warning'
-        : (preg_match('/uploaded|works again|ready/i', $subject) ? 'success' : 'info');
+    $level = in_array($level, ['warning', 'success', 'info'], true) ? $level : (preg_match('/fail|stopped working|problem|shorter|reminder|not working|gave up|not enough|does not exist/i', $subject) ? 'warning'
+        : (preg_match('/uploaded|works again|ready/i', $subject) ? 'success' : 'info'));
     $f = RECORDINGS_DIR . '/.notifications.json';
     $h = fopen($f, 'c+');
     if (!$h) return;
@@ -1305,11 +1393,12 @@ function record_notification(string $subject, string $body): void
 }
 
 /** Shows a message in the dashboard's Alerts (and the channel log). */
-function alert(string $subject, string $body): void
+/** $level: 'warning' | 'success' | 'info'; null = decided from the subject (only for subjects without titles). */
+function alert(string $subject, string $body, ?string $level = null): void
 {
-    $subject = preg_replace('/^\[Recorder\]\s*/', '', $subject);
+    $subject = clean_text(preg_replace('/^\[Recorder\]\s*/', '', $subject));
     logmsg("Alert: $subject");
-    record_notification($subject, $body);
+    record_notification($subject, $body, $level);
 }
 
 // ---------------------------------------------------------------- MP4 conversion
@@ -1867,6 +1956,8 @@ function http_full(string $method, string $url, array $headers, ?string $body = 
     curl_setopt_array($ch, [
         CURLOPT_CUSTOMREQUEST  => $method,
         CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
         CURLOPT_CONNECTTIMEOUT => 10,
         CURLOPT_TIMEOUT        => $timeout,
         CURLOPT_HTTPHEADER     => $headers,
@@ -1976,7 +2067,7 @@ function upload_step(string $dir, array &$j, float $deadline): string
             : (strlen($base) > 100 ? substr($base, 0, 97) . '...' : $base);
         if ($mo && $mo['moments']) logmsg(sprintf('YouTube moments for %s: %d found%s', basename($dir), count($mo['moments']),
             $mo['labels'] ? ' - title gets: ' . implode(', ', $mo['labels']) : ''));
-        $desc  = $clean("Recorded Twitch stream.\n\n" . ($mo ? moments_description($mo['moments']) : '') . (string)@file_get_contents("$dir/summary.txt"));
+        $desc  = $clean(youtube_description($meta, $mo ? $mo['moments'] : []));
         $desc  = function_exists('mb_strcut') ? mb_strcut($desc, 0, 4900) : substr($desc, 0, 4900);
         [$code, $h, $body] = http_full('POST',
             'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
@@ -2073,19 +2164,50 @@ function handle_yt_error(int $code, string $body, array &$j, callable $pause, ca
     return 'paused';
 }
 
+/**
+ * The public YouTube description: only what viewers should see (title, categories, date, length,
+ * moments). The internal summary (server folder, cron runs, gaps) stays in the recording folder.
+ */
+function youtube_description(array $meta, array $moments): string
+{
+    $clock = function (float $t) { $t = (int)max(0, $t); return sprintf('%d:%02d:%02d', intdiv($t, 3600), intdiv($t, 60) % 60, $t % 60); };
+    $who = (string)($meta['channel'] ?? 'The streamer');
+    $start = strtotime((string)($meta['stream_started'] ?? '')) ?: time();
+    $lines = [sprintf('%s streamed on Twitch on %s.', $who, date('j M Y, H:i', $start))];
+    if (($meta['title'] ?? '') !== '') $lines[] = 'Title: ' . $meta['title'];
+    if (!empty($meta['recorded_seconds'])) $lines[] = 'Length: ' . $clock((float)$meta['recorded_seconds']);
+    $changes = $meta['changes'] ?? [];
+    $games = [];
+    foreach ($changes as $c) {
+        $g = (string)($c['game'] ?? '');
+        if ($g !== '' && (!$games || end($games)[1] !== $g)) $games[] = [(float)($c['video'] ?? 0), $g];
+    }
+    if (count($games) > 1) {
+        $lines[] = '';
+        $lines[] = 'Categories:';
+        foreach ($games as [$t, $g]) $lines[] = $clock($t) . ' ' . $g;
+    } elseif (($meta['game'] ?? '') !== '') {
+        $lines[] = 'Category: ' . $meta['game'];
+    }
+    $out = implode("\n", $lines) . "\n\n";
+    if ($moments && function_exists('moments_description')) $out .= moments_description($moments);
+    return $out . "Recorded with Stream Recorder\u{2122}\n";
+}
+
 function finish_upload(string $dir, array $j, string $body): string
 {
     $v  = json_decode($body, true) ?: [];
-    $id = $v['id'] ?? '?';
-    $privacy = $v['status']['privacyStatus'] ?? YOUTUBE_PRIVACY;
-    $url = "https://youtu.be/$id";
+    $id = (string)($v['id'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9_-]{6,20}$/', $id)) $id = ''; // only YouTube's own video id format
+    $privacy = in_array($v['status']['privacyStatus'] ?? '', ['private', 'unlisted', 'public'], true) ? $v['status']['privacyStatus'] : YOUTUBE_PRIVACY;
+    $url = $id !== '' ? "https://youtu.be/$id" : '';
     $meta = json_decode((string)@file_get_contents("$dir/meta.json"), true) ?: [];
     $meta['youtube'] = ['id' => $id, 'url' => $url, 'account' => $j['account'], 'privacy' => $privacy, 'uploaded' => date('Y-m-d H:i:s')];
     file_put_contents("$dir/meta.json", json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-    @file_put_contents("$dir/summary.txt", "YouTube:          $url ($privacy, account '{$j['account']}')\n", FILE_APPEND);
-    logmsg("YouTube upload DONE: $url ($privacy)");
-    alert('Uploaded to YouTube: ' . ($meta['title'] ?? basename($dir)),
-        "The recording was uploaded to YouTube account '{$j['account']}' as $privacy:\n\n$url\n\nThe recording stays on the server.\n");
+    @file_put_contents("$dir/summary.txt", "YouTube:          " . ($url ?: '(no video id returned)') . " ($privacy, account '{$j['account']}')\n", FILE_APPEND);
+    logmsg("YouTube upload DONE: " . ($url ?: '(no video id returned)') . " ($privacy)");
+    alert('Uploaded to YouTube: ' . (($meta['title'] ?? '') !== '' ? $meta['title'] : basename($dir)),
+        "The recording was uploaded to YouTube account '{$j['account']}' as $privacy:\n\n$url\n\nThe recording stays on the server.\n", 'success');
     return 'done';
 }
 
@@ -2262,12 +2384,45 @@ function run_manager(): void
     $lk = fopen(RECORDINGS_DIR . '/.manager.lock', 'c');
     if (!$lk || !flock($lk, LOCK_EX | LOCK_NB)) return; // the previous one is still uploading
     stop_conversions_check();
+    manager_checks();
     process_secret_setups();
     check_token_health();
     process_conversions();
     if (function_exists('process_scans')) process_scans();
+    if (function_exists('process_speech_lib')) process_speech_lib();
     process_uploads();
     flock($lk, LOCK_UN);
+}
+
+/** Once a minute in the manager: early disk warning, and a warning when this folder is reachable from the web. */
+function manager_checks(): void
+{
+    $f = RECORDINGS_DIR . '/.checks.json';
+    $c = json_decode((string)@file_get_contents($f), true) ?: [];
+    $changed = false;
+    if (MIN_FREE_GB > 0) {
+        $free = free_space_bytes();
+        if ($free !== null && $free < 2 * MIN_FREE_GB * 1073741824 && time() - (int)($c['disk_warned'] ?? 0) > 86400) {
+            $low = $free < MIN_FREE_GB * 1073741824;
+            alert($low ? 'Disk almost full - recording is paused' : 'Disk space getting low',
+                sprintf("Only %.1f GB is free. Recording pauses below %s GB (MIN_FREE_GB) and continues by itself when there is room again.\n\nDelete recordings you no longer need on the dashboard.\n",
+                    $free / 1073741824, MIN_FREE_GB), 'warning');
+            $c['disk_warned'] = time();
+            $changed = true;
+        }
+    }
+    // A recorder folder inside the website's folder could be downloadable (.htaccess only protects on Apache/LiteSpeed).
+    $inWeb = (bool)preg_match('#/(public_html|www|wwwroot|htdocs|httpdocs|html)/#i', str_replace('\\', '/', __DIR__) . '/');
+    if ($inWeb && empty($c['webroot_warned'])) {
+        alert('Recorder folder is inside the website folder',
+            "This recorder runs from " . __DIR__ . ", which looks like part of your website.\n\n"
+            . "Recordings and the secret/ folder could then be downloaded from the web on servers that ignore .htaccess (e.g. nginx).\n"
+            . "Move the folder next to public_html instead of inside it, and update the cron line and RECORDER_DIR (docs/install-webserver.md).\n", 'warning');
+        $c['webroot_warned'] = time();
+        $changed = true;
+    }
+    if (!$inWeb && !empty($c['webroot_warned'])) { unset($c['webroot_warned']); $changed = true; }
+    if ($changed) @file_put_contents($f, json_encode($c));
 }
 
 // ---------------------------------------------------------------- IO usage (dashboard graph)
@@ -2378,6 +2533,8 @@ function finalize(array $s, string $display, string $chanDir): void
         "Ads skipped:      {$s['ads_skipped']} segments",
         "Chat lines:       {$s['chat_lines']}",
         "Cron runs:        {$s['runs']} (longest {$s['longest_run']}s, killed by host: {$s['kills']}x)",
+        ...(!empty($s['capped']) ? ['Length cap:       stopped at ' . MAX_RECORDING_HOURS . ' h (MAX_RECORDING_HOURS)'] : []),
+        ...(!empty($s['disk_alerted']) ? ['Disk:             paused at least once because free space was below ' . MIN_FREE_GB . ' GB'] : []),
         "Folder:           $recDir",
     ]) . "\n";
 
@@ -2410,5 +2567,5 @@ function finalize(array $s, string $display, string $chanDir): void
     @file_put_contents($recDir . '/summary.txt', $summary);
     logmsg("ENDED: stream finished.\n" . $summary);
 
-    alert("$display streamed: " . (($s['title'] ?? '') !== '' ? $s['title'] : '(no title)'), "A stream was recorded. Decide whether to keep it:\n\n$summary");
+    alert("$display streamed: " . (($s['title'] ?? '') !== '' ? $s['title'] : '(no title)'), "A stream was recorded. Decide whether to keep it:\n\n$summary", 'info');
 }

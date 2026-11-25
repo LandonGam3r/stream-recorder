@@ -12,6 +12,18 @@ A web host can't run speech recognition, but your PC can, in the browser on its 
 
 For older footage, or recordings you only have on your PC: open `pc-tools/scan.html` from disk in Chrome or Edge, choose the recording folder, and start. It reads the sound straight from the MP4 (AAC or Opus; normal or fragmented) and writes the subtitle and translation files into that folder, where `player.html` finds them. See [pc-tools/README.md](../pc-tools/README.md#pc-scan-scanhtml-subtitles-and-translation).
 
+## How the subtitles are timed
+
+- **Word timing:** the scan uses speech models that give the time of every word ("_timestamped" versions). Each subtitle line then appears when it's spoken, and a new line starts at a pause, at the end of a sentence, or after about two lines of text.
+- **Fallback:** if those models can't load on your PC, the plain models are used with one time per sentence. Each line is then kept on screen only as long as it takes to read (1.5–7 seconds), placed where the speech is.
+- **Sound tags:** "[Musik]", "*Music*" and similar are removed.
+- **Older scans:** **Scan again** rebuilds their subtitles with these rules without redoing the speech recognition.
+
+## The speech library
+
+- **Opened from the dashboard:** the first scan asks your server to download the speech library once (about 25 MB, at the next cron run). The server records a checksum of every file and serves this frozen copy, so the page loads no code from other sites. See [security.md](security.md).
+- **Stand-alone version:** loads the library from jsDelivr directly.
+
 ## What you need
 
 - **Chrome or Edge on a desktop PC**, version 138 or newer.
@@ -61,7 +73,7 @@ While a scan is asked for or running, that recording's upload waits. It goes ahe
 
 - **Speech recognition makes mistakes.** It struggles with music, game sound, shouting, slang and several people talking at once. Moments from speech are only as good as the recognition.
 - **No language detection for speech:** pick the language the streamer speaks; it's remembered per streamer.
-- **Chat language detection:** chat messages are short, so the detector is often unsure. Then the scan assumes the stream's own language when that's one of the likely ones; messages that turn out to be in your language already stay as they are.
+- **Chat language detection:** chat is short slang with emotes, which language detection rarely recognises. So every message is translated from the streamer's language, unless the detector is sure it's another language. Messages that come back unchanged (already in your language, or only names and emotes) are left out. The scan log shows how many messages took each path.
 - **Chat language packs:** chat in other languages is translated when Chrome already has that language pack. The scan page lists the rest and offers a button to download those packs and translate them too.
 - **Privacy:**
   - **The page loads two things from outside:** the speech library from jsDelivr and the model from Hugging Face. The scan page's security policy allows only those, and only on that page.

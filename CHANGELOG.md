@@ -2,6 +2,52 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.5.0] - 2026-11-25
+
+Security and reliability release, from a full review of the application ([docs/security.md](docs/security.md)).
+
+### Added
+- **Disk guard.** Recording pauses when free space (disk or hosting quota) drops below `MIN_FREE_GB` (default 5 GB) and continues by itself when there is room again. An alert warns at twice that value. A long or non-stop stream can no longer fill the hosting account, which would also break your website and email.
+- **Length cap.** `MAX_RECORDING_HOURS` (default 0 = off) stops recording a stream after that many hours.
+- **Log rotation.** A log larger than `LOG_MAX_MB` (default 5) becomes `recorder.log.1` (one old copy kept); the dashboard links the *older part*.
+- **Log out and Log out everywhere** on the dashboard. The login cookie now carries its issue time and a session generation: the server rejects it after `COOKIE_DAYS`, and *Log out everywhere* ends every login at once.
+- **Delete the plain-text key copy** from the dashboard once you've saved the key; only its hash remains.
+- **Warning when the recorder folder is inside the website folder**, from the recorder (alert) and the dashboard (red notice). `.htaccess` only protects on Apache/LiteSpeed.
+- **Word-level subtitle timing.** The PC scan uses speech models with word timing, so each subtitle appears when it's spoken. Lines break at pauses, sentence ends or about two lines of text. The plain models are the fallback.
+- **`SECURITY.md`** with how to report a problem privately.
+- **Secrets check** in the GitHub workflow: fails if a key, token or personal `config.php` is ever committed.
+
+### Changed
+- **The PC scan's speech library is pinned.**
+  - **Where it comes from:** your server downloads it once from jsDelivr, records each file's checksum and serves this frozen copy.
+  - **Checksums:** the page declares them in an import map, so the browser refuses a file that differs.
+  - **Result:** the scan page loads no code from other sites, and jsDelivr is gone from its security policy.
+  - **Its own key:** the scan page no longer receives the dashboard's action token. It gets a key that only works for that one recording's scan steps, for 24 hours.
+- **The YouTube description is public-safe:** title, categories (with times), date, length and moments only. It used to include the internal summary with the server folder path, which shows the hosting username. This applies to the server and the PC uploader.
+- **Links in YouTube moments** (from chat messages) become "[link]". `MOMENTS_QUOTE_CHAT = false` shows only the writer's name.
+- **Only the app's own scripts run:**
+  - **Nonce:** every page gets a random nonce per load instead of allowing any inline script.
+  - **New headers:** `Permissions-Policy`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`.
+  - **Error display:** PHP errors are never shown on a page.
+- **Server downloads** use https only, and requests carrying the Twitch or Google token never follow redirects.
+- **Text from Twitch is cleaned on arrival.** Control characters and invisible text-direction characters are removed from titles, categories, names and chat. Alert colours are set by the recorder, never by words in a title.
+- **Checked IDs:** the stream number in folder names (digits only) and YouTube's video ID.
+- **Browser cache:** chat, subtitles and texts are never stored in it; video only briefly.
+- **`record.php` refuses web requests before writing anything.**
+- **`HOST=0.0.0.0 ./start-local.sh`** warns that the dashboard is then plain HTTP on your network and asks first.
+- **GitHub workflow:** read-only token; actions pinned to exact commits.
+
+### Fixed
+- **Chat translation translated almost nothing.**
+  - **Cause:** it relied on Chrome's language detector to recognise each message. Twitch chat is short slang with emotes, which it rarely recognises, so 1.4.0 still translated only a handful of messages per stream.
+  - **Fix:** every message is now translated from the streamer's language unless the detector is sure it's another one.
+  - **Scan log:** shows how many messages took each path, and any translator errors.
+- **Overlong subtitles.**
+  - **The problem:** speech recognition stretched lines over music, up to 9 minutes for "[Musik] [Musik] …".
+  - **Fix:** sound tags are removed, and each line is on screen as long as it takes to read (1.5–7 s) where the speech is. In two real recordings, 222 lines longer than 12 seconds went to none.
+  - **Older scans:** **Scan again** rebuilds their subtitles without redoing the speech recognition.
+- **Phone layout.** Long text without spaces (a link in a title) widened the whole dashboard; it now wraps.
+
 ## [1.4.0] - 2026-11-25
 
 ### Added
@@ -117,6 +163,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.5.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.1...v1.3.2

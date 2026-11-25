@@ -31,6 +31,23 @@ else
     say "ffmpeg: not found - recordings stay .ts files (VLC plays them). Install ffmpeg to get MP4s."
 fi
 
+# ---- reachable from other devices? Then it's plain HTTP on your network.
+case "$HOST" in
+    127.*|localhost|::1) ;;
+    *)
+        say ""
+        say "WARNING: HOST=$HOST makes the dashboard reachable from other devices on your network over plain"
+        say "HTTP: the dashboard key and your recordings travel unencrypted. Only do this on a network you trust."
+        if [ -t 0 ]; then
+            printf 'Continue? [y/N] '
+            read -r answer
+            case "$answer" in y|Y|yes|YES) ;; *) fail "stopped. Run without HOST to keep it on this computer only." ;; esac
+        else
+            say "(Not asked because there is no terminal; set HOST only if you mean it.)"
+        fi
+        ;;
+esac
+
 # ---- passphrase for encrypted tokens (optional)
 if [ -z "${REC_KEY:-}" ]; then
     if [ -t 0 ]; then

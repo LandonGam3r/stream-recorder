@@ -100,7 +100,51 @@ function scan_after_stream(string $dir, ?array $channelSettings): bool
     return true;
 }
 
-/** Turns subtitle segments [[start, end, text, translation?], ...] into WebVTT. $col 2 = original, 3 = translation. */
+/** Removes "[Musik]", "*Music*", "♪" and similar sound tags speech recognition puts in the text. */
+function scan_strip_tags(string $t): string
+{
+    $t = preg_replace('/[\[(*]\s*(?:musik|music|musique|m\x{FA}sica|muziek|musica|muzyka|BLANK_AUDIO)[^\])*]{0,20}[\])*]/iu', ' ', $t) ?? $t;
+    $t = str_replace(["\u{266A}", "\u{266B}"], ' ', $t);
+    return trim(preg_replace('/\s+/u', ' ', $t) ?? $t);
+}
+
+/**
+ * Subtitle lines ready to show: sound tags removed, and each line on screen only as long as it takes
+ * to read (about 15 characters a second, 1.5 to 7 s). Speech recognition often stretches a line over
+ * the music before it; the line is then placed at the end of that stretch, where the speech is.
+ * In: [[start, end, text, translation?], ...] (sorted by start). Out: the same shape.
+ */
+function scan_tidy(array $segs): array
+{
+    $out = [];
+    $prevEnd = 0.0;
+    $len = function ($s) { return function_exists('mb_strlen') ? mb_strlen($s) : strlen($s); };
+    foreach ($segs as $g) {
+        if (!is_array($g) || !isset($g[0], $g[1], $g[2])) continue;
+        $text = scan_strip_tags((string)$g[2]);
+        if ($text === '') continue;
+        $tr = isset($g[3]) ? scan_strip_tags((string)$g[3]) : '';
+        $s = (float)$g[0];
+        $e = max((float)$g[1], $s + 0.5);
+        $need = min(7.0, max(1.5, $len($text) / 15 + 1));
+        if ($e - $s > $need + 1) $s = $e - $need;
+        $s = max($s, $prevEnd);
+        if ($e < $s + 0.5) $e = $s + 0.5;
+        $row = [round($s, 2), round($e, 2), $text];
+        if ($tr !== '') $row[] = $tr;
+        $out[] = $row;
+        $prevEnd = $e;
+    }
+    // Short lines stay up long enough to read, as far as the next line allows.
+    for ($i = 0, $n = count($out); $i < $n; $i++) {
+        $need = min(7.0, max(1.5, $len($out[$i][2]) / 15 + 1));
+        $limit = $i + 1 < $n ? $out[$i + 1][0] : $out[$i][0] + $need;
+        if ($out[$i][1] - $out[$i][0] < $need) $out[$i][1] = round(max($out[$i][1], min($out[$i][0] + $need, $limit)), 2);
+    }
+    return $out;
+}
+
+/** Subtitle lines [[start, end, text, translation?], ...] as WebVTT. $col 2 = original, 3 = translation. */
 function scan_vtt(array $segments, int $col): string
 {
     $ts = function (float $t) {
@@ -109,12 +153,13 @@ function scan_vtt(array $segments, int $col): string
     };
     $out = "WEBVTT\n\n";
     $n = 0;
-    foreach ($segments as $seg) {
-        $text = trim(str_replace(["\r", '-->'], ['', '->'], (string)($seg[$col] ?? '')));
+    foreach (scan_tidy($segments) as $seg) {
+        $text = trim(str_replace("\r", '', (string)($seg[$col] ?? '')));
         if ($text === '') continue;
-        $s = (float)$seg[0];
-        $e = max((float)$seg[1], $s + 0.5);
-        $out .= ++$n . "\n" . $ts($s) . ' --> ' . $ts($e) . "\n" . preg_replace("/\n{2,}/", "\n", $text) . "\n\n";
+        // WebVTT treats < and & as markup; a blank line or "-->" would end or break the cue.
+        $text = str_replace(['&', '<', '>', '-->'], ['&amp;', '&lt;', '&gt;', '->'], $text);
+        $text = preg_replace("/\n{2,}/", "\n", $text);
+        $out .= ++$n . "\n" . $ts((float)$seg[0]) . ' --> ' . $ts((float)$seg[1]) . "\n" . $text . "\n\n";
     }
     return $out;
 }
@@ -271,5 +316,89 @@ function scan_check_audio_job(string $dir, array $s): void
             }
         }
     }
+    $GLOBALS['logFile'] = $own;
+}
+
+// ------------------------------------------------------------------ speech library (pinned copy)
+// The scan page's speech library (Transformers.js + its WebAssembly speech engine) is downloaded once
+// from jsDelivr by the server, its checksums are recorded, and the dashboard serves this frozen copy.
+// A later change on jsDelivr can never reach your dashboard, and the page loads no outside code.
+
+const SPEECH_LIB_VERSION = '3.8.1';
+const SPEECH_LIB_SOURCE  = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/';
+const SPEECH_LIB_FILES   = ['transformers.min.js', 'ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm'];
+
+function speech_lib_dir(string $recorderDir): string
+{
+    return rtrim($recorderDir, '/') . '/speech-lib/' . SPEECH_LIB_VERSION;
+}
+
+/** ['files' => [name => ['sha256' => base64, 'size' => n]], 'installed' => time] or null when not (fully) installed. */
+function speech_lib_manifest(string $recorderDir): ?array
+{
+    $m = json_decode((string)@file_get_contents(speech_lib_dir($recorderDir) . '/manifest.json'), true);
+    if (!is_array($m) || empty($m['files']['transformers.min.js'])) return null;
+    foreach ($m['files'] as $name => $f) {
+        if (!is_file(speech_lib_dir($recorderDir) . "/$name") || filesize(speech_lib_dir($recorderDir) . "/$name") !== (int)$f['size']) return null;
+    }
+    return $m;
+}
+
+/** Asks the next manager run to download the library (from the dashboard). */
+function speech_lib_request(string $recorderDir): void
+{
+    $dir = speech_lib_dir($recorderDir);
+    @mkdir($dir, 0755, true);
+    if (!is_file(dirname($dir) . '/.htaccess')) @file_put_contents(dirname($dir) . '/.htaccess', "Require all denied\nDeny from all\n");
+    if (!is_file("$dir/.request")) @file_put_contents("$dir/.request", (string)time());
+}
+
+/** Runs in the manager: downloads the requested library once and records its checksums. */
+function process_speech_lib(): void
+{
+    $base = dirname(RECORDINGS_DIR);
+    $dir = speech_lib_dir($base);
+    if (!is_file("$dir/.request") || speech_lib_manifest($base)) { @unlink("$dir/.request"); return; }
+    if ((int)@file_get_contents("$dir/.request") > time()) return; // waiting after a failed try
+    $own = $GLOBALS['logFile'] ?? null;
+    $GLOBALS['logFile'] = RECORDINGS_DIR . '/.system.log';
+    $get = function (string $name) use ($dir): ?array {
+        $tmp = "$dir/$name.part";
+        $fh = fopen($tmp, 'wb');
+        $ch = curl_init(SPEECH_LIB_SOURCE . $name);
+        curl_setopt_array($ch, [CURLOPT_FILE => $fh, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 3,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS, CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_CONNECTTIMEOUT => 10, CURLOPT_TIMEOUT => 120, CURLOPT_FAILONERROR => true]);
+        $ok = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        fclose($fh);
+        if (!$ok || $code !== 200 || filesize($tmp) < 512) { @unlink($tmp); return ['error' => "HTTP $code"]; }
+        rename($tmp, "$dir/$name");
+        return ['sha256' => base64_encode(hash_file('sha256', "$dir/$name", true)), 'size' => filesize("$dir/$name")];
+    };
+    $files = [];
+    $names = SPEECH_LIB_FILES;
+    for ($i = 0; $i < count($names); $i++) {
+        $name = $names[$i];
+        $r = $get($name);
+        if (isset($r['error']) && !in_array($name, SPEECH_LIB_FILES, true)) continue; // named in the code but not shipped: not needed
+        if (isset($r['error'])) {
+            logmsg("Speech library: could not download $name ({$r['error']}) - trying again in 30 minutes");
+            @file_put_contents("$dir/.request", (string)(time() + 1800));
+            $GLOBALS['logFile'] = $own;
+            return;
+        }
+        $files[$name] = $r;
+        // The library names the speech-engine files it loads; fetch any we don't have yet.
+        if ($name === 'transformers.min.js' && preg_match_all('/ort-wasm[\w.-]*\.(?:mjs|wasm)/', (string)file_get_contents("$dir/$name"), $m)) {
+            foreach (array_unique($m[0]) as $extra) if (!in_array($extra, $names, true)) $names[] = $extra;
+        }
+    }
+    file_put_contents("$dir/manifest.json", json_encode(['version' => SPEECH_LIB_VERSION, 'source' => SPEECH_LIB_SOURCE,
+        'installed' => time(), 'files' => $files], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    @unlink("$dir/.request");
+    $total = array_sum(array_column($files, 'size'));
+    logmsg(sprintf('Speech library %s downloaded for the PC scan (%d files, %.1f MB) and pinned by checksum', SPEECH_LIB_VERSION, count($files), $total / 1048576));
     $GLOBALS['logFile'] = $own;
 }

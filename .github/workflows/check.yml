@@ -2,12 +2,36 @@ name: check
 
 on: [push, pull_request]
 
+# The workflow's token can only read the repo.
+permissions:
+  contents: read
+
 jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: No secrets or personal settings committed
+        run: |
+          bad=0
+          # Files that only exist on a real installation.
+          for f in $(git ls-files); do
+            case "$f" in
+              server/config.php|dashboard/config.php|*/secret/*|*.enc|*token_setup.txt|*dashboard_key*|*client_secret*.json|*youtube_setup_*.json|pc-tools/accounts/*|server/channels.json|server/recordings/*)
+                echo "::error file=$f::this file must not be in the repository"; bad=1 ;;
+            esac
+          done
+          # Things that look like keys or tokens inside files.
+          if git grep -nIE -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' -e '1//0[A-Za-z0-9_-]{20,}' -e 'ya29\.[A-Za-z0-9_-]{20,}' -e 'GOCSPX-[A-Za-z0-9_-]{10,}' -e 'REC_KEY=[A-Za-z0-9]{16,}' -- . ':!.github/workflows/check.yml' ':!docs/*' ':!*.md'; then
+            echo "::error::something that looks like a key or token is committed"; bad=1
+          fi
+          exit $bad
+
   syntax:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
         with:
           php-version: '8.0'
       - name: PHP syntax (8.0, the minimum)
