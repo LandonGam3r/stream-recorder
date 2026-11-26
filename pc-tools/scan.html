@@ -48,6 +48,7 @@
   #preview { font-size: 13px; max-height: 180px; overflow: auto; margin-top: 10px; }
   #preview div { padding: 2px 0; } #preview .t { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
   #preview .tr { color: var(--muted); display: block; margin-left: 52px; }
+  #sumOut { white-space: pre-wrap; font-size: 13px; line-height: 1.5; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; max-height: 480px; overflow: auto; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -73,6 +74,8 @@
       <select id="target"></select>
       <label for="chatTr">Chat</label>
       <label class="row" style="color:var(--text)"><input type="checkbox" id="chatTr" checked> <span>also translate the chat</span></label>
+      <label for="sumOn" id="sumLabel" hidden>AI summary</label>
+      <label class="row" id="sumRow" style="color:var(--text)" hidden><input type="checkbox" id="sumOn"> <span>also write a summary with Chrome's built-in AI (free, on this PC)</span></label>
       <label for="quality">Speech recognition</label>
       <select id="quality">
         <option value="base">Fast (small model, ~150 MB)</option>
@@ -82,6 +85,12 @@
     </div>
     <p class="hint" id="howText"></p>
     <div class="row"><button class="primary" id="startBtn">Start scan</button><span class="hint" id="startHint"></span></div>
+  </div>
+
+  <div class="card" id="sumCard" hidden>
+    <h2>AI summary on this PC</h2>
+    <p style="margin-top:0" id="sumHow"></p>
+    <div class="row"><button class="primary" id="sumBtn">Write summary</button><span class="hint" id="sumHint"></span></div>
   </div>
 
   <div class="card" id="progress" hidden>
@@ -240,6 +249,8 @@
       if (st === 'done') $('#startHint').textContent = 'This recording was scanned before. Starting again reuses what is there for the same language and quality, and only adds what\'s missing (e.g. a new translation).';
       else if (done) $('#startHint').textContent = done + ' piece(s) were already scanned; it continues from there.';
       else if (st === 'preparing' || st === 'requested') $('#startHint').textContent = 'The server is preparing the sound; you can start already.' + (this.status.scan.note ? ' (' + this.status.scan.note + ')' : '');
+      setupSummary(!(SRC.summary && SRC.summary.server));
+      if (SRC.summary && SRC.summary.only) { showSummaryOnly(); return; }
       if (!SRC.lib && !TEST) this.waitForLibrary();
     },
     /** First scan ever: the server downloads the speech library once (next cron run); then this page reloads. */
@@ -299,6 +310,8 @@
     },
     saveChat(target, map) { return this.api('chat', { target, map }); },
     saveText(text) { return this.api('text', { text }); },
+    saveSummary(text) { return this.api('summary', { text }); },
+    async spokenLanguage() { await this.refresh(); return this.status.transcript.language || ''; },
     async segments() {
       await this.refresh();
       const p = this.status.transcript.parts || {};
@@ -353,6 +366,7 @@
       $('#pickInfo').textContent = dir.name + ': ' + this.video.name + ' (' + (this.video.size / 1073741824).toFixed(2) + ' GB)' + (this.chatFile ? ' + chat' : '');
       $('#startHint').textContent = done ? done + ' piece(s) were already scanned; it continues from there (same language and quality).' : '';
       $('#setup').hidden = false;
+      setupSummary(true);
     },
     async saved() {
       const t = this.transcript || {};
@@ -391,6 +405,8 @@
     chatText() { return this.chatFile ? this.chatFile.text() : null; },
     saveChat(target, map) { return this.write('chat_translation.' + target + '.json', JSON.stringify({ target, map })); },
     saveText(text) { return this.write('transcript.txt', text); },
+    saveSummary(text) { return this.write('ai_summary.md', text); },
+    async spokenLanguage() { return (this.transcript && this.transcript.language) || ''; },
     async segments() { return (this.transcript && this.transcript.segments) || []; },
     async meta() { return this.metaInfo || {}; },
     async fail() {},
@@ -787,6 +803,7 @@
     try {
       // Translators first: Chrome only downloads a language pack right after a click.
       step('Preparing the translator…', 0);
+      if (wantSummary()) prepareSummarizer(spoken); // also needs the click (Chrome may download its model)
       await prepareTranslation(spoken, target, chat);
       await run(spoken, target === spoken ? '' : target, q, chat);
     } catch (e) {
@@ -873,6 +890,10 @@
     let chatNote = '';
     if (chat && target) chatNote = await translateChat(target, spoken);
     else await writeText(spoken, target, null);
+    if (wantSummary()) {
+      try { await writeSummary(spoken); chatNote = (chatNote ? chatNote + ', ' : '') + 'the AI summary'; }
+      catch (e) { log('AI summary: ' + e.message, 'warn'); }
+    }
     step('Done', 100, 'Took ' + Math.max(1, Math.round((performance.now() - t0) / 60000)) + ' min');
     notice('Done. ' + B.doneText.replace('{chat}', chatNote ? ', ' + chatNote : ''), 'ok');
     const url = B.playerUrl();
@@ -981,6 +1002,155 @@
       await B.saveText(out.join('\n') + '\n');
       log('Text version saved: transcript.txt (' + segs.length + ' spoken lines' + (chatText ? ' + chat' : '') + ')', 'ok');
     } catch (e) { log('Could not write the text version: ' + e.message, 'warn'); }
+  }
+
+  // ============================================================ AI summary with Chrome's built-in AI
+  // The free way, when no Claude API key is set on the dashboard (Claude, on the server, is better and
+  // also looks at pictures). Chrome's model has a short memory: the stream is summarised in 10-minute
+  // pieces, then those are combined into a short overview and a headline.
+  const SUM_LANGS = ['en', 'de', 'es', 'fr', 'ja'];
+  let summarizers = null;
+  const wantSummary = () => !$('#sumRow').hidden && $('#sumOn').checked;
+  function setupSummary(offer) {
+    const has = TEST ? !!TEST.summarizer : 'Summarizer' in self;
+    const show = offer && (LOCAL || !!(SRC && SRC.summary));
+    $('#sumLabel').hidden = $('#sumRow').hidden = !show;
+    let pref = null;
+    try { pref = localStorage.getItem('scan-summary'); } catch (e) {}
+    $('#sumOn').checked = show && has && pref !== 'off';
+    $('#sumOn').disabled = !has;
+    if (!has) $('#sumRow').title = 'Needs Chrome or Edge 138+ on a desktop computer';
+    $('#sumOn').onchange = () => { try { localStorage.setItem('scan-summary', $('#sumOn').checked ? 'on' : 'off'); } catch (e) {} };
+  }
+  function showSummaryOnly() {
+    $('#setup').hidden = true;
+    $('#sumCard').hidden = false;
+    const has = TEST ? !!TEST.summarizer : 'Summarizer' in self;
+    $('#sumHow').textContent = 'Chrome\'s built-in AI writes an overview of this stream on this PC, from '
+      + (SRC.summary.has_transcript ? 'what the streamer said (from the PC scan) and the chat' : 'the chat (there is no PC scan of this recording, so it can\'t use what the streamer said - scan it first for a better summary)')
+      + '. Nothing is sent anywhere. The first time, Chrome downloads its model (a few GB, once).';
+    if (!has) { $('#sumBtn').disabled = true; $('#sumHint').textContent = 'This browser has no built-in AI: use Chrome or Edge 138 or newer on a desktop computer.'; }
+    $('#sumBtn').onclick = async () => {
+      $('#sumBtn').disabled = true;
+      $('#progress').hidden = false;
+      notice('');
+      running = true;
+      keepAwake();
+      try {
+        const spoken = (await B.spokenLanguage()) || $('#spoken').value;
+        prepareSummarizer(spoken);
+        await writeSummary(spoken);
+        step('Done', 100, '');
+      } catch (e) {
+        step('Stopped', null, '');
+        log(e.message, 'bad');
+        notice('The summary could not be written: ' + e.message, 'bad');
+        $('#sumBtn').disabled = false;
+      }
+      running = false;
+      try { if (wake) await wake.release(); } catch (e) {}
+    };
+  }
+  /** Creates the summarizers during the click; Chrome downloads its model then if needed. */
+  function prepareSummarizer(spoken) {
+    const inLang = SUM_LANGS.includes(spoken) ? spoken : 'en';
+    const make = (type, length) => {
+      const opts = { type, length, format: 'plain-text', expectedInputLanguages: [...new Set([inLang, 'en'])], outputLanguage: 'en',
+        sharedContext: 'A recorded Twitch stream. Lines look like "[h:mm:ss] speaker: text". "Streamer" lines come from automatic speech recognition and can contain mistakes. Write in English.' };
+      if (TEST) return Promise.resolve(TEST.summarizer(opts));
+      return Summarizer.availability(opts).then(a => {
+        if (a === 'unavailable') throw new Error('Chrome\'s built-in AI is not available on this PC (it needs a graphics card with more than 4 GB memory or 16 GB RAM, and about 22 GB free disk space)');
+        return Summarizer.create(Object.assign({
+          monitor(m) { m.addEventListener('downloadprogress', e => step('AI summary: Chrome is downloading its model (once)…', 100 * e.loaded, Math.round(100 * e.loaded) + '%')); },
+        }, opts));
+      });
+    };
+    summarizers = { lang: inLang, points: make('key-points', 'short'), tldr: make('tldr', 'long'), headline: make('headline', 'short') };
+    for (const k of ['points', 'tldr', 'headline']) summarizers[k].catch(() => {});
+  }
+  /** Splits text into pieces that fit the summarizer's input limit. */
+  async function fitPieces(sum, text) {
+    const quota = sum.inputQuota || 4000;
+    const usage = async t => (sum.measureInputUsage ? await sum.measureInputUsage(t) : t.length / 4);
+    if (await usage(text) <= quota * 0.9) return [text];
+    const lines = text.split('\n'), half = Math.floor(lines.length / 2);
+    if (half < 1) return [text.slice(0, Math.floor(text.length * quota * 0.9 / (await usage(text))))];
+    return [...await fitPieces(sum, lines.slice(0, half).join('\n')), ...await fitPieces(sum, lines.slice(half).join('\n'))];
+  }
+  async function writeSummary(spoken) {
+    if (!summarizers) prepareSummarizer(spoken);
+    step('AI summary: reading the stream…', 0);
+    const segs = await B.segments();
+    const chatText = await B.chatText();
+    let meta = Object.assign({}, await B.meta());
+    const hm = chatText && /^#META (.*)\r?\n/.exec(chatText);
+    if (hm) { try { meta = Object.assign(JSON.parse(hm[1]), meta); } catch (e) {} }
+    // Chrome's model reads only a few languages; otherwise use the translation from the scan (if any).
+    const useTr = !SUM_LANGS.includes(spoken) && segs.some(g => g[3]);
+    const rows = tidy(segs).map(g => [g[0], 'Streamer: ' + (useTr && g[3] ? g[3] : g[2])]);
+    if (chatText) {
+      const re = /^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?)\] (.*)$/;
+      let map = null;
+      for (const line of chatText.split(/\r?\n/)) {
+        const m = re.exec(line); if (!m) continue;
+        const ms = parseLocal(m[1]);
+        if (!map) map = chatMapper(meta, ms);
+        let body = m[2];
+        if (body.startsWith('** ')) body = '(Twitch) ' + body.slice(3); else if (body.startsWith('* ')) body = body.slice(2);
+        if (/https?:\/\//.test(body)) body = body.replace(/https?:\/\/\S+/g, '[link]');
+        rows.push([Math.max(0, map(ms)), body.slice(0, 200)]);
+      }
+    }
+    if (!rows.length) throw new Error('there is nothing to summarise (no speech text and no chat)');
+    rows.sort((a, b) => a[0] - b[0]);
+    const cats = (meta.changes || []).map(c => [+c.video || 0, c.game || '']);
+    const catAt = t => { let g = meta.game || ''; for (const [v, n] of cats) if (v <= t + 1) g = n; return g; };
+    const total = meta.recorded_seconds || rows[rows.length - 1][0] + 1;
+    const blocks = [];
+    for (let a = 0; a < total; a += PIECE) {
+      const part = rows.filter(r => r[0] >= a && r[0] < a + PIECE);
+      if (part.length) blocks.push([a, Math.min(total, a + PIECE), part.map(([t, x]) => '[' + clock(t) + '] ' + x).join('\n')]);
+    }
+    step('AI summary: waiting for Chrome\'s AI…', 2);
+    const [sp, st, sh] = [await summarizers.points, await summarizers.tldr, await summarizers.headline];
+    const who = meta.channel || (SRC && SRC.channel) || 'The streamer';
+    const timeline = [];
+    const t0 = performance.now();
+    for (let i = 0; i < blocks.length; i++) {
+      const [a, b, text] = blocks[i];
+      step('AI summary: part ' + (i + 1) + ' of ' + blocks.length + '…', 5 + 85 * i / blocks.length, clock(a) + ' – ' + clock(b));
+      const ctx = 'Stream by ' + who + (meta.title ? ', titled "' + meta.title + '"' : '') + '. This part runs from ' + clock(a) + ' to ' + clock(b) + ' in the video' + (catAt(a) ? ', category: ' + catAt(a) : '') + '.';
+      const pts = [];
+      for (const piece of await fitPieces(sp, text)) {
+        try { pts.push(String(await sp.summarize(piece, { context: ctx })).trim()); }
+        catch (e) { log('AI summary: part ' + (i + 1) + ' skipped (' + e.message + ')', 'warn'); }
+      }
+      if (pts.length) timeline.push([a, b, pts.join('\n')]);
+    }
+    if (!timeline.length) throw new Error('Chrome\'s AI returned nothing');
+    step('AI summary: overview…', 92);
+    const bullets = timeline.map(([a, , p]) => '[' + clock(a) + ']\n' + p).join('\n');
+    let overview = bullets;
+    while ((await fitPieces(st, overview)).length > 1) {  // too long for one go: shorten in groups first
+      const parts = await fitPieces(st, overview);
+      overview = (await Promise.all(parts.map(x => st.summarize(x).catch(() => '')))).join('\n');
+    }
+    const short = String(await st.summarize(overview, { context: 'Notes on a whole Twitch stream by ' + who + ', in order.' })).trim();
+    let head = '';
+    try { head = String(await sh.summarize(short)).trim().replace(/^#+\s*/, ''); } catch (e) {}
+    const md = ['# ' + (head || meta.title || 'Stream summary'), '', '**In short:** ' + short.replace(/\s*\n+\s*/g, ' '), '', '## Timeline'];
+    for (const [a, b, p] of timeline) {
+      md.push('', '#### [' + clock(a) + '] to ' + clock(b) + (catAt(a) ? ' · ' + catAt(a) : ''));
+      for (const line of p.split('\n')) { const t = line.replace(/^\s*[-*•]\s*/, '').trim(); if (t) md.push('- ' + t); }
+    }
+    md.push('', '*Written on this PC with Chrome\'s built-in AI from ' + (segs.length ? 'what the streamer said (speech recognition' + (useTr ? ', translated' : '') + ') and ' : '') + 'the chat. It\'s a small model: check details in the player.*');
+    const out = md.join('\n') + '\n';
+    await B.saveSummary(out);
+    log('AI summary written in ' + Math.max(1, Math.round((performance.now() - t0) / 1000)) + ' s (' + timeline.length + ' parts)' + (LOCAL ? ': ai_summary.md' : ' - it is on the dashboard at this recording'), 'ok');
+    const pre = el('div'); pre.id = 'sumOut'; pre.textContent = out;
+    const old = $('#sumOut'); if (old) old.remove();
+    $('#progress').append(pre);
+    return out;
   }
 
   // ============================================================ chat translation

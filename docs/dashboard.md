@@ -11,6 +11,8 @@ Open the dashboard's address and paste the key from `secret/dashboard_key.txt` (
 
 ## Header
 
+The header stays at the top while you scroll. At the bottom of the page, the ↑ button next to the footer brings you back up.
+
 - **Log out** ends the login in this browser. **Log out everywhere** ends every login, on all devices.
 - **Notices** under the header:
   - **Key copy:** a reminder to delete the plain-text key copy once you've saved the key (button included).
@@ -84,6 +86,7 @@ Each recording shows its title, date, length, files, size and status. Running co
   - *Cancel upload* takes it out of the queue again. *Upload again* appears for a recording that's already on YouTube.
   - For a stream that's still being recorded, set the account in the streamer's settings instead: it's uploaded when the stream ends.
 - **Scan** opens the [PC scan](pc-scan.md) for subtitles, translation and spoken-word moments. While a scan runs, the recording shows its progress, with *Open scan* to continue and *cancel*. Afterwards the line lists the subtitles and chat translations it has; *Scan again* adds, for example, another translation.
+- **Summary** opens the [AI summary](ai-summary.md) of the stream under its line; its times open the player at that point. *Summarize* (when there's none yet) lets Claude write one, or opens the scan page to write it with Chrome's built-in AI when no API key is set. While one is being made, the line shows its progress and *cancel*.
 - **Delete** asks for confirmation, then removes the whole recording folder. It's not possible while that stream is still recording or converting.
 
 ![Player](images/player.png)
@@ -105,6 +108,10 @@ Each recording shows its title, date, length, files, size and status. Running co
 - **Chat sync ±** nudges chat if it feels early or late. Click a chat timestamp to jump there.
 - **Pop out chat** opens chat in its own window for a second screen, with the same search.
 - **Keys:** Space or K (play/pause), ←/→ (5 s), M (mute), F (fullscreen, also double-click), C (chat window).
+
+## AI summaries
+
+The **AI summaries** card holds the API key for Claude, the model, and whether every stream is summarised automatically and with pictures. It shows whether the key works and what the summaries have cost so far. Step-by-step setup and the free alternative are on the card itself and in [docs/ai-summary.md](ai-summary.md).
 
 ## YouTube moments
 

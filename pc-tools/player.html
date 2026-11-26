@@ -609,6 +609,9 @@
 
     setupExtras(src.subs || [], src.chatTrs || []);
     video.src = src.url;
+    // Opened from a time in an AI summary (…#t=seconds): start there.
+    const jump = /(?:^#|&)t=(\d+)/.exec(location.hash);
+    if (jump) video.addEventListener('loadedmetadata', () => { video.currentTime = Math.min(+jump[1], (video.duration || 1e9) - 1); }, { once: true });
     setupThumbs(src.url, !src.remote);
     if (!mePinned && src.me) { meName = String(src.me); }
     fillUserList(document);

@@ -2,6 +2,26 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.6.0] - 2026-11-26
+
+### Added
+- **AI summary of a stream** ([docs/ai-summary.md](docs/ai-summary.md)): a written overview to catch up on a missed stream. It has a headline, a short overview, a timeline, highlights, the chat's mood, and announcements. On the dashboard, **Summary** at a recording opens it; every time in it opens the player at that point.
+  - **Claude (default):** the server sends what the streamer said (from the PC scan), the chat, categories, moments and a picture every few minutes to Anthropic's Message Batches API (half price; result within minutes), and collects the result on a later cron run.
+    - **Cost:** well under 1 cent per stream with Claude Haiku 5.5; Claude Sonnet 5.5 is optional. The cost is shown per summary, and in total on the card.
+    - **Automatic:** after each stream (after the MP4 conversion and your PC-scan choice), or by hand with **Summarize**.
+  - **Free on your PC:** without an API key, the scan page writes the summary with Chrome's built-in AI (Chrome/Edge 138+), in 10-minute parts and without pictures. The stand-alone `pc-tools/scan.html` writes `ai_summary.md` into the folder.
+  - **AI summaries card:**
+    - **Key:** paste the API key; it's stored encrypted by the next cron run, like the Twitch token, and checked daily.
+    - **Settings:** model, automatic on/off, pictures on/off.
+    - **Help:** step-by-step setup, cost and privacy notes.
+- **Player:** opening it with `#t=<seconds>` starts at that point (used by the summary's times).
+- **Footer** on the dashboard with © year and a ↑ back-to-the-top button.
+
+### Changed
+- **The dashboard header stays at the top while scrolling.** On phones it's compact, about two short rows.
+- **The secrets check in the GitHub workflow** also looks for Anthropic API keys.
+- **pc-tools/README.md:** the uploader takes the description from `meta.json` (`summary.txt` hasn't been used since 1.5.0).
+
 ## [1.5.1] - 2026-11-26
 
 ### Fixed
@@ -173,6 +193,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.6.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.3...v1.4.0

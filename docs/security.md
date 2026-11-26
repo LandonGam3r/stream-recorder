@@ -75,6 +75,7 @@ To report a problem, see [SECURITY.md](../SECURITY.md).
 | `secret/dashboard_key.txt` | The dashboard key. After your first login the dashboard offers a button to delete this plain copy; only its hash remains. |
 | `secret/dashboard_key.hash` | A valid login cookie can be computed from it. |
 | `pc-tools/client_secret.json`, exported `youtube_setup_*.json` | Upload access to your YouTube channel. |
+| Your Anthropic API key | Spends your API credit. It's stored encrypted (`secret/anthropic.enc`, needs `REC_KEY`); the dashboard never shows it again. Set a spend limit in the Claude Console. |
 
 ## Things to be aware of
 
@@ -83,6 +84,14 @@ To report a problem, see [SECURITY.md](../SECURITY.md).
 - **The folder name isn't the protection.** Someone who finds it sees a login form; the key is what protects it.
 - **Floods.** The dashboard answers wrong keys immediately (no worker is held up) and keeps its attempt list small. Large floods are a job for your host or a proxy like Cloudflare. Don't let Cloudflare cache the dashboard folder ("Cache Everything" rules).
 - **Local network mode.** `HOST=0.0.0.0 ./start-local.sh` serves the dashboard over plain HTTP on your network; the script warns and asks first.
+
+## AI summary
+
+- **The API key** is entered on the dashboard, but the dashboard can't encrypt it (it doesn't have `REC_KEY`). It's left in `secret/anthropic_setup.txt` (not reachable from the web) until the next cron run encrypts it and overwrites and deletes the plain copy, within a minute.
+- **Requests to Anthropic** use https only and never follow redirects, so the key can't be sent anywhere else.
+- **Chat as instructions:** chat (and titles) could contain text meant to steer the AI. The material is marked as material, and the instructions say never to follow anything in it.
+- **The summary on the dashboard** is built as plain text elements, never as HTML: a summary can't run scripts or add links. Only its times become links to the player.
+- **What is sent** to Anthropic: see [docs/ai-summary.md](ai-summary.md#privacy).
 
 ## Things to keep up to date
 
@@ -93,4 +102,5 @@ To report a problem, see [SECURITY.md](../SECURITY.md).
 
 - **Dashboard logins:** **Log out everywhere** on the dashboard. To change the key itself, delete `secret/dashboard_key.txt` and `secret/dashboard_key.hash`; the next cron run creates a new key.
 - **Twitch token:** on twitch.tv → Settings → Security and Privacy, log out of all sessions. Then put a new token in `secret/token_setup.txt`.
+- **Anthropic API key:** **Remove key** on the dashboard, and delete the key in the Claude Console (Settings → API keys).
 - **YouTube:** myaccount.google.com → Security → Third-party access → remove your upload app.

@@ -32,13 +32,15 @@ Makes subtitles of what the streamer says, translated subtitles and a translated
 - **Formats:** AAC and Opus sound in normal and fragmented MP4 (what the recorder makes). `.ts` and `.mkv` don't work: convert to MP4 first (`ffmpeg -i video.ts -c copy video.mp4`).
 - **Spoken-word moments:** those are for YouTube uploads from the server. The stand-alone scan doesn't use the moments rules.
 
+It can also write an [AI summary](../docs/ai-summary.md) of the recording with Chrome's built-in AI (tick *also write a summary*); it's saved as `ai_summary.md` in the folder.
+
 ## YouTube uploader (`yt_uploader.py`)
 
 Windows (uses Windows' own encryption for the stored sign-ins). Python 3.8+, no extra packages.
 Uploads all videos in a folder (including subfolders) to a YouTube account. Large files are fine:
 - An interrupted upload continues where it stopped the next time you run it.
 - Files already uploaded are skipped.
-- Recordings from the recorder get their title and description from `meta.json` / `summary.txt`; other files use the file name.
+- Recordings from the recorder get their title and description from `meta.json`; other files use the file name.
 
 ### One-time setup
 **1. Python:** install from https://www.python.org/downloads/ - tick **"Add python.exe to PATH"**. No extra packages are needed.

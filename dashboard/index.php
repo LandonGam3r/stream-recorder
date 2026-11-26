@@ -239,7 +239,7 @@ function login_page(string $error = '', int $code = 200): void
 }
 
 if (!$authed) {
-    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi', 'lib', 'logout', 'keyfile']));
+    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi', 'lib', 'logout', 'keyfile', 'aisummary']));
     if (isset($_GET['api']) || isset($_GET['io'])) { // the open dashboard noticed it's logged out: reload shows the login form
         http_response_code(401);
         header('Content-Type: application/json');
@@ -295,6 +295,8 @@ function tail_lines(string $f, int $n, bool $fold = true): array
 function collect(): array
 {
     $rec = REC_DIR . '/recordings';
+    if (is_file(REC_DIR . '/summary.php')) require_once REC_DIR . '/summary.php';
+    $aiSpent = 0.0;
     $convertQ = read_json("$rec/.convert_queue.json");
     $uploadQ  = read_json("$rec/.upload_queue.json");
     $now = time();
@@ -372,6 +374,7 @@ function collect(): array
                 'playable' => is_file("$d/video.mp4"),
                 'busy' => recording_busy($d, $st, $convertQ),
                 'scan' => scan_info($d),
+                'ai' => ai_info($d, $aiSpent),
             ];
         }
         $channels[] = [
@@ -464,6 +467,7 @@ function collect(): array
     return [
         'now' => $now,
         'processes' => $procs,
+        'ai_summary' => ai_status($aiSpent),
         'moments' => ['rules' => array_values(array_filter((array)read_json(REC_DIR . '/moments.json'), 'is_array')), 'available' => is_file(REC_DIR . '/moments.php')],
         'channels' => $channels,
         'twitch_token' => $token ? ['status' => $token['status'] ?? '?', 'detail' => $token['detail'] ?? '', 'checked' => $token['checked'] ?? null] : null,
@@ -503,12 +507,38 @@ if (!function_exists('mb_substr')) { function mb_substr($s, $start, $len = null)
 function file_type(string $name): ?string
 {
     $fixed = ['video.mp4' => 'video/mp4', 'chat.txt' => 'text/plain; charset=utf-8', 'meta.json' => 'application/json',
-              'transcript.json' => 'application/json', 'transcript.txt' => 'text/plain; charset=utf-8'];
+              'transcript.json' => 'application/json', 'transcript.txt' => 'text/plain; charset=utf-8',
+              'ai_summary.md' => 'text/plain; charset=utf-8'];
     if (isset($fixed[$name])) return $fixed[$name];
     if (preg_match('/^subtitles(\.[a-z]{2,3}(-[A-Za-z]{2,4})?)?\.vtt$/', $name)) return 'text/vtt; charset=utf-8';
     if (preg_match('/^chat_translation\.[a-z]{2,3}(-[A-Za-z]{2,4})?\.json$/', $name)) return 'application/json';
     if (preg_match('/^audio\/part\d{3}\.(ogg|m4a)$/', $name, $m)) return $m[1] === 'ogg' ? 'audio/ogg' : 'audio/mp4';
     return null;
+}
+
+/** AI summary of a recording for the dashboard, or null. Adds its cost to $spent. */
+function ai_info(string $d, float &$spent): ?array
+{
+    if (!is_file("$d/ai_summary.json") || !function_exists('summary_load')) return null;
+    $s = summary_load($d);
+    $spent += (float)($s['cost_usd'] ?? 0);
+    $model = (string)($s['model'] ?? '');
+    return [
+        'state' => (string)($s['state'] ?? ''), 'note' => $s['note'] ?? null, 'error' => $s['error'] ?? null,
+        'source' => $s['source'] ?? null, 'model' => SUMMARY_MODELS[$model]['name'] ?? ($model !== '' ? $model : null),
+        'cost' => isset($s['cost_usd']) ? (float)$s['cost_usd'] : null, 'finished' => (int)($s['finished'] ?? 0),
+        'pictures' => $s['pictures'] ?? null, 'notes' => $s['notes'] ?? [], 'has_text' => is_file("$d/ai_summary.md"),
+    ];
+}
+
+/** AI summary settings and key status for the dashboard. */
+function ai_status(float $spent): array
+{
+    if (!function_exists('summary_settings')) return ['available' => false];
+    $models = [];
+    foreach (SUMMARY_MODELS as $id => $m) $models[] = ['id' => $id, 'name' => $m['name']];
+    return ['available' => true, 'settings' => summary_settings(REC_DIR), 'key' => summary_key_status(REC_DIR),
+        'models' => $models, 'spent' => round($spent, 4)];
 }
 
 /** Subtitle and chat-translation files of a recording: [['name' => ..., 'lang' => ..., 'kind' => 'subs'|'chat'], ...] */
@@ -727,6 +757,12 @@ if (isset($_GET['scan'])) {
         'key' => scan_key($ch, basename($d)),
         'has_chat' => is_file("$d/chat.txt"),
         'lib' => $lib ? $self . '?lib=' : null, // null = the server is still downloading it
+        // AI summary: the page can write one with Chrome's built-in AI (free); "summary_only" = only that step.
+        'summary' => is_file(REC_DIR . '/summary.php') ? [
+            'server' => is_file(REC_DIR . '/secret/anthropic.enc') || is_file(REC_DIR . '/secret/anthropic_setup.txt'),
+            'only' => isset($_GET['summary']),
+            'has_transcript' => is_file("$d/transcript.json"),
+        ] : null,
     ];
     // Import map: the browser refuses a library file whose checksum differs from the one recorded at download.
     $importMap = '';
@@ -872,6 +908,21 @@ if (isset($_GET['scanapi'])) {
         echo json_encode(['ok' => true]);
         exit;
     }
+    if ($op === 'summary') {
+        // Summary written on the PC with Chrome's built-in AI (when no API key is set, or by choice).
+        if (!is_file(REC_DIR . '/summary.php')) action_fail(409, 'summary.php is missing in the recorder folder.');
+        require_once REC_DIR . '/summary.php';
+        $text = str_replace("\r", '', (string)($in['text'] ?? ''));
+        if (trim($text) === '' || strlen($text) > 300000) action_fail(400, 'Bad data.');
+        if (in_array((string)(summary_load($d)['state'] ?? ''), SUMMARY_ACTIVE, true)) action_fail(409, 'Claude is making a summary of this stream right now.');
+        file_put_contents("$d/ai_summary.md", rtrim($text) . "\n", LOCK_EX);
+        summary_update($d, function (array &$s) {
+            $s = ['state' => 'done', 'source' => 'chrome', 'model' => 'chrome-built-in', 'finished' => time(), 'updated' => time(), 'cost_usd' => 0];
+        });
+        $logLine('AI summary written on the PC (Chrome\'s built-in AI) for ' . basename($d));
+        echo json_encode(['ok' => true]);
+        exit;
+    }
     if ($op === 'finish') {
         if (!in_array($state, ['ready', 'scanning', 'done'], true)) action_fail(409, 'This scan was cancelled or not started.');
         $tr = read_json("$d/transcript.json");
@@ -1000,6 +1051,79 @@ if (isset($_GET['keyfile'])) {
     @file_put_contents(REC_DIR . '/recordings/.system.log', '[' . date('Y-m-d H:i:s') . "] Dashboard: plain-text key copy deleted (only its hash remains)\n", FILE_APPEND | LOCK_EX);
     echo json_encode(['ok' => true]);
     exit;
+}
+
+// ---------------------------------------------------------------- AI summary: settings, API key, make / delete
+if (isset($_GET['aisummary'])) {
+    $in = check_action_request();
+    if (!is_file(REC_DIR . '/summary.php')) action_fail(409, 'summary.php is missing in the recorder folder: upload it next to record.php.');
+    require_once REC_DIR . '/summary.php';
+    $op = (string)($in['op'] ?? '');
+    $sec = REC_DIR . '/secret';
+    $sysLog = function (string $m) { @file_put_contents(REC_DIR . '/recordings/.system.log', '[' . date('Y-m-d H:i:s') . "] Dashboard: $m\n", FILE_APPEND | LOCK_EX); };
+    if ($op === 'settings') {
+        $cur = summary_settings(REC_DIR);
+        foreach (['auto', 'pictures'] as $k) if (array_key_exists($k, $in)) $cur[$k] = (bool)$in[$k];
+        if (isset($in['model'])) {
+            if (!isset(SUMMARY_MODELS[(string)$in['model']])) action_fail(400, 'Unknown model.');
+            $cur['model'] = (string)$in['model'];
+        }
+        file_put_contents(REC_DIR . '/summary_settings.json', json_encode($cur), LOCK_EX);
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'key') {
+        // The dashboard can't encrypt (only the cron job has REC_KEY): it leaves the key for the next cron run,
+        // which encrypts it into secret/anthropic.enc and deletes this file - like the Twitch token.
+        $k = trim((string)($in['key'] ?? ''));
+        if (!preg_match('/^sk-ant-[A-Za-z0-9_-]{20,300}$/', $k)) action_fail(400, 'That doesn\'t look like an Anthropic API key - it starts with sk-ant-.');
+        if (!is_dir($sec)) action_fail(409, 'The secret/ folder is missing - has the recorder run yet?');
+        $tmp = "$sec/anthropic_setup.txt.tmp";
+        if (file_put_contents($tmp, $k) === false) action_fail(500, 'Could not save the key.');
+        @chmod($tmp, 0600);
+        rename($tmp, "$sec/anthropic_setup.txt");
+        @unlink("$sec/anthropic_status.json");
+        $sysLog('Anthropic API key entered - the next cron run stores it encrypted');
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'key_remove') {
+        foreach (['anthropic_setup.txt', 'anthropic.enc', 'anthropic_status.json'] as $f) {
+            if (is_file("$sec/$f")) { @file_put_contents("$sec/$f", str_repeat('x', (int)filesize("$sec/$f"))); @unlink("$sec/$f"); }
+        }
+        $sysLog('Anthropic API key removed');
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    $d = recording_dir($in['channel'] ?? null, $in['folder'] ?? null);
+    if (!$d) action_fail(404, 'That recording no longer exists.');
+    $chanLog = function (string $m) use ($d) { @file_put_contents(dirname($d) . '/recorder.log', '[' . date('Y-m-d H:i:s') . "] $m\n", FILE_APPEND | LOCK_EX); };
+    $state = (string)(summary_load($d)['state'] ?? '');
+    if ($op === 'queue') {
+        if (!is_file("$sec/anthropic.enc") && !is_file("$sec/anthropic_setup.txt")) action_fail(409, 'No API key yet - set one in the AI summary card, or use "Summarize on this PC".');
+        if (in_array($state, SUMMARY_ACTIVE, true)) action_fail(409, 'A summary of this stream is already being made.');
+        $st = read_json(dirname($d) . '/state.json');
+        if (!empty($st['stream_id']) && ($st['dir'] ?? '') === basename($d)) action_fail(409, 'This stream is still being recorded - the summary can be made when it has ended.');
+        summary_queue($d, 'from the dashboard');
+        $chanLog('AI summary requested via the dashboard: ' . basename($d) . ' - made by the next cron runs');
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'cancel') {
+        if (!in_array($state, SUMMARY_ACTIVE, true)) action_fail(409, 'No summary is being made.');
+        summary_update($d, function (array &$s) { $s['state'] = 'cancelled'; $s['updated'] = time(); unset($s['note']); });
+        $chanLog('AI summary cancelled via the dashboard: ' . basename($d));
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'delete') {
+        if (in_array($state, SUMMARY_ACTIVE, true)) action_fail(409, 'Cancel the summary that is being made first.');
+        @unlink("$d/ai_summary.md");
+        @unlink("$d/ai_summary.json");
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    action_fail(400, 'Unknown action.');
 }
 
 // ---------------------------------------------------------------- streamers: add / switch / settings / remove
@@ -1259,7 +1383,35 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--line); }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--line);
+           position: sticky; top: 0; z-index: 30; background: rgba(15,17,21,.94); backdrop-filter: blur(8px); }
+  footer { max-width: 1200px; margin: 0 auto; padding: 0 24px 28px; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+  .foot-chip { font-size: 13px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; }
+  .foot-chip a { color: var(--text); text-decoration: none; }
+  .foot-chip a:hover { text-decoration: underline; }
+  .act.totop { font-size: 15px; line-height: 1; padding: 6px 11px; }
+  /* AI summary */
+  .aibody { padding: 12px 16px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; font-size: 13px; }
+  .aibody p { margin: 0; color: var(--muted); }
+  .airow { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  .airow select, .airow input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px; max-width: 100%; }
+  .airow input[type=password] { width: 340px; }
+  .aistatus { font-size: 13px; }
+  .aistatus.ok { color: var(--ok); } .aistatus.warn { color: var(--warn); } .aistatus.bad { color: var(--bad); }
+  .aibody details { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  .aibody summary { cursor: pointer; color: var(--text); }
+  .aibody ol, .aibody ul { margin: 8px 0 2px; padding-left: 20px; color: var(--muted); }
+  .aibody li { margin: 3px 0; }
+  .aibody a { color: var(--accent); }
+  .act.on { border-color: var(--accent); color: var(--text); }
+  tr.sumrow td { background: rgba(143,124,255,.06); border-radius: 8px; padding: 12px 14px; }
+  .md { font-size: 14px; line-height: 1.5; max-width: 860px; }
+  .sumrow .md h3, .sumrow .md h4 { text-transform: none; letter-spacing: normal; color: var(--text); font-weight: 650; }
+  .md h3 { font-size: 16px; margin: 2px 0 8px; } .md h4 { font-size: 14px; margin: 14px 0 4px; }
+  .md p { margin: 6px 0; } .md ul { margin: 4px 0; padding-left: 20px; } .md li { margin: 3px 0; }
+  .md .ts { font-variant-numeric: tabular-nums; color: var(--accent); margin-right: 4px; text-decoration: none; }
+  .md a.ts:hover { text-decoration: underline; }
+  .sumfoot { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
   header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
   .updated { color: var(--muted); font-size: 12px; }
   main { padding: 20px 24px 40px; max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
@@ -1267,6 +1419,15 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   main { overflow-wrap: anywhere; }
   header h1 { overflow-wrap: normal; word-break: keep-all; }
   .logout { display: inline-flex; gap: 6px; }
+  /* Phones: the header stays at the top while scrolling, so it is kept to about two short rows. */
+  @media (max-width: 640px) {
+    header { padding: 8px 12px; gap: 6px 10px; flex-wrap: wrap; }
+    header h1 { font-size: 15px; white-space: nowrap; }
+    header .hstat { gap: 6px; justify-content: flex-start; flex: 1 1 auto; }
+    header .updated { display: none; }
+    header .chip { font-size: 11px; padding: 2px 8px; gap: 4px; }
+    header .act { font-size: 11px; padding: 2px 7px; }
+  }
   .notice { border-radius: 10px; padding: 12px 16px; font-size: 13px; display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
   .notice.bad { background: rgba(255,107,107,.1); border: 1px solid rgba(255,107,107,.4); color: var(--text); }
   .notice.info { background: rgba(143,124,255,.08); border: 1px solid rgba(143,124,255,.35); }
@@ -1489,7 +1650,12 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   </div>
   <div id="channels"></div>
   <div id="momentsBox"></div>
+  <div id="aiBox"></div>
 </main>
+<footer>
+  <span class="foot-chip">&copy; <?= date('Y') ?> · <a href="https://github.com/LandonGam3r/stream-recorder" target="_blank" rel="noopener noreferrer">Stream Recorder™</a> · By Landon</span>
+  <button class="act totop" id="toTop" type="button" title="Back to the top" aria-label="Back to the top">&uarr;</button>
+</footer>
 <script>
 (function () {
   const $ = (s) => document.querySelector(s);
@@ -1874,6 +2040,183 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     if (scanErr[key]) d.append(el('div', 'del-err', scanErr[key]));
     return d;
   }
+  // ---- AI summary: per recording
+  const AI_ACTIVE = ['queued', 'pictures', 'submitted'];
+  const AI_TEXT = { queued: 'waiting', pictures: 'taking pictures from the video', submitted: 'Claude is writing it', done: 'ready',
+                    failed: 'failed', cancelled: 'cancelled' };
+  let openSummary = null;
+  const aiErr = {}, aiCache = {};
+  const aiSource = ai => ai.source === 'chrome' ? 'Chrome\'s built-in AI (on your PC)' : (ai.model || 'Claude');
+  function aiLine(c, r) {
+    const ai = r.ai, d = el('div', 'rec-sub');
+    let t = 'AI summary: ' + (AI_TEXT[ai.state] || ai.state);
+    if (ai.note && AI_ACTIVE.includes(ai.state) && ai.note !== AI_TEXT[ai.state]) t += ' · ' + ai.note;
+    if (ai.state === 'failed' && ai.error) t += ' · ' + ai.error;
+    d.textContent = t;
+    if (AI_ACTIVE.includes(ai.state)) {
+      const x = el('button', 'linkbtn', 'cancel'); x.title = 'Stop making this summary';
+      x.onclick = () => aiAction('cancel', c.name, r.folder);
+      d.append(' · ', x);
+    } else if (ai.state === 'failed' || ai.state === 'cancelled') {
+      const x = el('button', 'linkbtn', 'try again'); x.onclick = () => summarize(c, r);
+      d.append(' · ', x);
+    }
+    const key = c.name + '/' + r.folder;
+    if (aiErr[key]) d.append(el('div', 'del-err', aiErr[key]));
+    return d;
+  }
+  async function aiAction(op, channel, folder, extra) {
+    const key = channel + '/' + folder;
+    delete aiErr[key];
+    try { await post('?aisummary=1', Object.assign({ op, channel, folder }, extra || {})); } catch (e) { aiErr[key] = e.message; }
+    await load();
+  }
+  function summarize(c, r, forcePc) {
+    const k = lastData.ai_summary.key;
+    if (!forcePc && (k.set || k.pending)) { openSummary = null; aiAction('queue', c.name, r.folder); return; }
+    window.open('?ch=' + encodeURIComponent(c.name) + '&scan=' + encodeURIComponent(r.folder) + '&summary=1', '_blank', 'noopener');
+  }
+  // Markdown from the summary, built as elements (never as HTML): headings, bullets, **bold**, *italic*,
+  // and [h:mm:ss] times that open the player at that point. Links stay plain text.
+  function mdRender(md, playUrl) {
+    const box = el('div', 'md');
+    let ul = null;
+    const inline = (parent, s) => {
+      const re = /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|\[\d{1,2}:\d{2}:\d{2}\])/g;
+      let last = 0, m;
+      while ((m = re.exec(s))) {
+        if (m.index > last) parent.append(s.slice(last, m.index));
+        const tok = m[0];
+        if (tok.startsWith('**')) parent.append(el('b', null, tok.slice(2, -2)));
+        else if (tok.startsWith('[')) {
+          const p = tok.slice(1, -1).split(':').map(Number), secs = p[0] * 3600 + p[1] * 60 + p[2];
+          if (playUrl) { const a = el('a', 'ts', tok.slice(1, -1)); a.href = playUrl + '#t=' + secs; a.target = '_blank'; a.rel = 'noopener'; a.title = 'Play from here'; parent.append(a); }
+          else parent.append(el('span', 'ts', tok.slice(1, -1)));
+        } else parent.append(el('i', null, tok.slice(1, -1)));
+        last = re.lastIndex;
+      }
+      if (last < s.length) parent.append(s.slice(last));
+    };
+    for (const raw of String(md).split('\n')) {
+      const line = raw.replace(/\s+$/, '');
+      let m;
+      if (!line.trim()) { ul = null; continue; }
+      if ((m = /^(#{1,4})\s+(.*)$/.exec(line))) { ul = null; const h = el(m[1].length === 1 ? 'h3' : 'h4'); inline(h, m[2]); box.append(h); continue; }
+      if ((m = /^\s*[-*•]\s+(.*)$/.exec(line))) { if (!ul) { ul = el('ul'); box.append(ul); } const li = el('li'); inline(li, m[1]); ul.append(li); continue; }
+      ul = null; const p = el('p'); inline(p, line); box.append(p);
+    }
+    return box;
+  }
+  function summaryRow(c, r) {
+    const key = c.name + '/' + r.folder, ai = r.ai;
+    const tr = el('tr', 'sumrow'), td = el('td'); td.colSpan = 2; tr.append(td);
+    const body = el('div', 'md'); td.append(body);
+    const cached = aiCache[key];
+    const playUrl = r.playable ? '?ch=' + encodeURIComponent(c.name) + '&play=' + encodeURIComponent(r.folder) : null;
+    const show = text => body.replaceWith(mdRender(text, playUrl));
+    if (cached && cached.finished === ai.finished) show(cached.text);
+    else {
+      body.textContent = 'Loading…';
+      fetch('?ch=' + encodeURIComponent(c.name) + '&file=' + encodeURIComponent(r.folder) + '&name=ai_summary.md', { credentials: 'same-origin', cache: 'no-store' })
+        .then(x => x.ok ? x.text() : Promise.reject(new Error('HTTP ' + x.status)))
+        .then(text => { aiCache[key] = { finished: ai.finished, text }; if (body.isConnected) show(text); })
+        .catch(e => { body.textContent = 'Could not load the summary (' + e.message + ').'; });
+    }
+    const f = el('div', 'sumfoot rec-sub');
+    const when = ai.finished ? new Date(ai.finished * 1000).toLocaleString() : '';
+    f.append(el('span', null, 'Written by ' + aiSource(ai) + (when ? ' · ' + when : '') + (ai.cost ? ' · about $' + ai.cost.toFixed(4) : '')
+      + (ai.pictures ? ' · ' + ai.pictures + ' pictures' : '') + (ai.notes && ai.notes.length ? ' · ' + ai.notes.join('; ') : '')
+      + '. AI can get details wrong - the times link to the player so you can check.'));
+    const again = el('button', 'act', 'Summarize again'); again.onclick = () => summarize(c, r);
+    const k = lastData.ai_summary.key;
+    const pc = el('button', 'act', 'Summarize on this PC'); pc.title = 'Free, with Chrome\'s built-in AI (shorter, no pictures)'; pc.onclick = () => summarize(c, r, true);
+    const del = el('button', 'act del', 'Delete summary'); del.onclick = () => { if (confirm('Delete this summary?')) { openSummary = null; aiAction('delete', c.name, r.folder); } };
+    const close = el('button', 'act', 'Close'); close.onclick = () => { openSummary = null; render(lastData); };
+    f.append(again);
+    if (k.set || k.pending) f.append(pc);
+    f.append(del, close);
+    td.append(f);
+    if (aiErr[key]) td.append(el('div', 'del-err', aiErr[key]));
+    return tr;
+  }
+
+  // ---- AI summary: settings card (built once; only its status is refreshed)
+  let aiUI = null;
+  function buildAi() {
+    const card = el('div', 'card ai');
+    const head = el('div', 'card-head'); head.append(el('h2', null, 'AI summaries'), el('span', 'updated', 'a written overview of each stream, shown at its recording'));
+    card.append(head);
+    const body = el('div', 'aibody');
+    const status = el('div', 'aistatus');
+    const sw = (label, title) => { const l = el('label', 'chk'); const i = el('input'); i.type = 'checkbox'; l.append(i, ' ' + label); l.title = title; return [l, i]; };
+    const [autoL, auto] = sw('Summarize each stream automatically', 'After a stream (and after your PC-scan choice), Claude writes the summary');
+    const [picL, pics] = sw('Include pictures from the video', 'A picture every few minutes, so Claude also sees what was on screen (a few tenths of a cent extra)');
+    const model = el('select'); model.title = 'Which Claude model writes the summaries';
+    const r1 = el('div', 'airow'); r1.append(autoL, picL, model);
+    const save = async (body) => { try { await post('?aisummary=1', Object.assign({ op: 'settings' }, body)); } catch (e) { status.textContent = e.message; } await load(); };
+    auto.onchange = () => save({ auto: auto.checked });
+    pics.onchange = () => save({ pictures: pics.checked });
+    model.onchange = () => save({ model: model.value });
+    const kf = el('form', 'airow'); kf.autocomplete = 'off';
+    const ki = el('input'); ki.type = 'password'; ki.placeholder = 'Paste your API key (sk-ant-…)'; ki.spellcheck = false; ki.autocomplete = 'off';
+    const kb = el('button', 'act add', 'Save key'); kb.type = 'submit';
+    const kr = el('button', 'act del', 'Remove key'); kr.type = 'button';
+    const kerr = el('span', 'del-err');
+    kf.append(ki, kb, kr, kerr);
+    kf.onsubmit = async e => {
+      e.preventDefault(); kerr.textContent = '';
+      try { await post('?aisummary=1', { op: 'key', key: ki.value.trim() }); ki.value = ''; await load(); } catch (x) { kerr.textContent = x.message; }
+    };
+    kr.onclick = async () => { if (!confirm('Remove the API key from the server? Summaries can then only be made on your PC.')) return; try { await post('?aisummary=1', { op: 'key_remove' }); } catch (x) { kerr.textContent = x.message; } await load(); };
+    const how = el('details');
+    how.append(el('summary', null, 'How to set up Claude (once, about 5 minutes)'));
+    const ol = el('ol');
+    const li = (...parts) => { const x = el('li'); parts.forEach(p => x.append(p)); ol.append(x); };
+    const link = (text, href) => { const a = el('a', null, text); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; };
+    li('Go to ', link('platform.claude.com', 'https://platform.claude.com'), ' (the Claude Console) and sign in or create an account. This is separate from a claude.ai subscription.');
+    li('Under ', link('Settings → Billing', 'https://platform.claude.com/settings/billing'), ', buy a little credit - $5 covers hundreds of summaries with Haiku. (Max and Team plans include monthly API credits you can claim there.) Optional: set a monthly spend limit.');
+    li('Under ', link('Settings → API keys', 'https://platform.claude.com/settings/keys'), ', click Create key, name it "Stream Recorder" and copy it.');
+    li('Paste it above and click Save key. Within a minute the recorder stores it encrypted (like the Twitch token, so REC_KEY must be in your cron line) and checks that it works; the dashboard never shows it again.');
+    how.append(ol);
+    const cost = el('p', null, 'What it costs: one summary is sent as a batch job (half price; the result comes back within minutes, at most a day). A 2–4 hour stream with pictures is about 60,000–80,000 tokens: well under 1 cent with Claude Haiku 5.5, roughly 10–20 cents with Claude Sonnet 5.5 (better writing). The exact cost appears under each summary.');
+    const priv = el('p', null, 'What is sent: the stream\'s title and categories, what the streamer said (from the PC scan, when done), the chat and the pictures. Under Anthropic\'s commercial terms for the API, it may not use this to train its models. Without a PC scan the summary is based on chat, categories and pictures only.');
+    how.append(cost, priv);
+    const pc = el('details');
+    pc.append(el('summary', null, 'No API key? Summarize on your PC for free'));
+    const ul = el('ul');
+    ['Click "Summarize" at a recording: the scan page opens and Chrome\'s built-in AI (Gemini Nano, or Phi in Edge) writes the summary on your PC. Nothing is sent anywhere.',
+     'Needs Chrome or Edge 138 or newer on Windows, macOS or Linux, a graphics card with more than 4 GB memory (or 16 GB RAM), and about 22 GB free disk space for the model, which Chrome downloads once.',
+     'It\'s a smaller model with a short memory: it summarises the stream in 10-minute pieces and then combines those, without pictures. Good for an overview, less detailed than Claude.',
+     'It reads English, German, Spanish, French and Japanese; for other languages it uses the English translation from the PC scan.'].forEach(t => ul.append(el('li', null, t)));
+    pc.append(ul);
+    body.append(status, r1, kf, how, pc);
+    card.append(body);
+    $('#aiBox').append(card);
+    aiUI = { card, status, auto, pics, model, ki, kr, kb };
+  }
+  function renderAi(data) {
+    const ai = data.ai_summary;
+    if (!ai || !ai.available) { if (aiUI) aiUI.card.style.display = 'none'; return; }
+    if (!aiUI) buildAi();
+    aiUI.card.style.display = '';
+    const u = aiUI, k = ai.key, a = document.activeElement;
+    if (a !== u.model) u.model.replaceChildren(...ai.models.map(m => Object.assign(el('option', null, m.name + (m.id === 'claude-haiku-5-5' ? ' - cheapest (recommended)' : ' - better writing, costs more')), { value: m.id })));
+    u.model.value = ai.settings.model;
+    u.auto.checked = ai.settings.auto && (k.set || k.pending);
+    u.pics.checked = ai.settings.pictures;
+    let cls = 'warn', t;
+    if (k.pending) t = 'API key received - the next cron run (within a minute) stores it encrypted and checks it.';
+    else if (k.set && k.ok === true) { cls = 'ok'; t = '✓ Claude writes the summaries (key ' + (k.hint || '') + ' works' + (ai.spent ? ', spent so far about $' + ai.spent.toFixed(4) : '') + ').'; }
+    else if (k.set && k.ok === false) { cls = 'bad'; t = '✗ ' + (k.error || 'The API key does not work.'); }
+    else if (k.set) t = 'API key stored' + (k.hint ? ' (' + k.hint + ')' : '') + (k.error ? ' - ' + k.error : ' - not checked yet.');
+    else t = 'No API key yet: summaries are made on your PC with Chrome\'s built-in AI. For better summaries with pictures, set up Claude below.';
+    u.status.className = 'aistatus ' + cls; u.status.textContent = t;
+    u.kr.style.display = k.set || k.pending ? '' : 'none';
+    u.kb.textContent = k.set ? 'Replace key' : 'Save key';
+    u.auto.disabled = !(k.set || k.pending);
+    u.auto.parentNode.title = u.auto.disabled ? 'Needs an API key (automatic summaries are made by Claude on the server)' : 'After a stream (and after your PC-scan choice), Claude writes the summary';
+  }
+
   async function scanAction(op, channel, folder) {
     const key = channel + '/' + folder;
     delete scanErr[key];
@@ -1885,6 +2228,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     window.open('?ch=' + encodeURIComponent(channel) + '&scan=' + encodeURIComponent(folder), '_blank', 'noopener');
     if (request) scanAction('request', channel, folder);
   }
+  $('#toTop').onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
   // ---- log out, and one-time notices
   $('#logoutBtn').onclick = async () => { try { await post('?logout=1', { op: 'this' }); } catch (e) {} location.reload(); };
   $('#logoutAllBtn').onclick = async () => {
@@ -1972,6 +2316,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   function render(data) {
     lastData = data;
     renderMoments(data);
+    renderAi(data);
     renderNotices(data);
     renderScanAsks(data);
     const now = data.now;
@@ -2136,6 +2481,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
           a.append(el('div', 'rec-sub', 'YouTube (' + r.upload.account + '): ' + (r.upload.started || r.upload.error ? pct + '%' : scanWait ? 'waits for the PC scan' : 'queued, starts at the next cron run when nothing is recording') + (r.upload.error ? ' · ' + r.upload.error : '')));
         }
         if (r.scan) a.append(scanLine(c, r));
+        if (r.ai && (r.ai.state !== 'done' || !r.ai.has_text)) a.append(aiLine(c, r));
         if (r.youtube) { const l = el('a', null, 'YouTube (' + r.youtube.privacy + ')'); l.href = r.youtube.url; l.target = '_blank'; l.rel = 'noopener noreferrer'; const d = el('div', 'rec-sub'); d.append(l); a.append(d); }
         b.append(el('span', 'pill p-' + r.status.replace(' ', '-'), r.status)); b.append(el('div', 'rec-sub', mb(r.size)));
         const key = c.name + '/' + r.folder;
@@ -2170,12 +2516,26 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
           sb.onclick = () => openScan(c.name, r.folder, true);
           acts.append(sb);
         }
+        if (data.ai_summary && data.ai_summary.available) {
+          if (r.ai && r.ai.has_text) {
+            const sb = el('button', 'act' + (openSummary === key ? ' on' : ''), 'Summary');
+            sb.title = 'Read the AI summary of this stream';
+            sb.onclick = () => { openSummary = openSummary === key ? null : key; render(lastData); };
+            acts.append(sb);
+          } else if (!(r.ai && AI_ACTIVE.includes(r.ai.state)) && r.status !== 'recording' && r.status !== 'interrupted' && (r.files['chat.txt'] || r.playable)) {
+            const sb = el('button', 'act', 'Summarize');
+            sb.title = data.ai_summary.key.set || data.ai_summary.key.pending ? 'Let Claude write a summary of this stream' : 'Write a summary on this PC with Chrome\'s built-in AI (no API key set)';
+            sb.onclick = () => summarize(c, r);
+            acts.append(sb);
+          }
+        }
         const del = el('button', 'act del', 'Delete');
         if (r.busy) { del.disabled = true; del.title = "Can't delete now: " + r.busy; }
         else del.onclick = () => { pendingDelete = key; deleteError = null; pendingYt = null; render(lastData); };
         acts.append(del);
         b.append(acts);
         tr.append(a, b); table.append(tr);
+        if (openSummary === key && r.ai && r.ai.has_text) table.append(summaryRow(c, r));
         if (pendingYt === key) {
           const ctr = el('tr', 'confirm yt'); const td = el('td'); td.colSpan = 2;
           td.append(el('span', null, (r.youtube ? 'Already on YouTube (' + r.youtube.account + '). Upload "' : 'Upload "') + (r.title || r.folder) + '" to'));

@@ -64,6 +64,8 @@ server/
   record.php, config.php
   moments.php                YouTube moments scanner (used by record.php and the dashboard)
   scan.php                   PC scan: prepares the sound, holds uploads, writes subtitles
+  summary.php                AI summary: pictures, sends to Claude (Message Batches), fetches the result
+  summary_settings.json      AI summary settings (the dashboard edits them)
   channels.json              streamer list (the dashboard edits it)
   moments.json               YouTube moments rules (the dashboard edits them)
   speech-lib/<version>/      pinned copy of the PC scan's speech library + manifest.json (checksums)
@@ -79,6 +81,7 @@ server/
         meta.json            title, times, timeline, title/category changes, moments, YouTube link
         summary.txt          end-of-stream summary
         scan.json            PC-scan state (only when asked or scanned)
+        ai_summary.md, ai_summary.json   AI summary and its state/cost (ai_frames/ while it's made)
         transcript.json      what was said, with times and translation (PC scan)
         subtitles.vtt, subtitles.<lang>.vtt, chat_translation.<lang>.json
         audio/partNNN.ogg    sound pieces for a running PC scan (deleted when done)

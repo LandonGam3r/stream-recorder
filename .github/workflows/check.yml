@@ -17,12 +17,12 @@ jobs:
           # Files that only exist on a real installation.
           for f in $(git ls-files); do
             case "$f" in
-              server/config.php|dashboard/config.php|*/secret/*|*.enc|*token_setup.txt|*dashboard_key*|*client_secret*.json|*youtube_setup_*.json|pc-tools/accounts/*|server/channels.json|server/recordings/*)
+              server/config.php|dashboard/config.php|*/secret/*|*.enc|*token_setup.txt|*anthropic_setup.txt|*dashboard_key*|*client_secret*.json|*youtube_setup_*.json|pc-tools/accounts/*|server/channels.json|server/recordings/*)
                 echo "::error file=$f::this file must not be in the repository"; bad=1 ;;
             esac
           done
           # Things that look like keys or tokens inside files.
-          if git grep -nIE -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' -e '1//0[A-Za-z0-9_-]{20,}' -e 'ya29\.[A-Za-z0-9_-]{20,}' -e 'GOCSPX-[A-Za-z0-9_-]{10,}' -e 'REC_KEY=[A-Za-z0-9]{16,}' -- . ':!.github/workflows/check.yml' ':!docs/*' ':!*.md'; then
+          if git grep -nIE -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' -e '1//0[A-Za-z0-9_-]{20,}' -e 'ya29\.[A-Za-z0-9_-]{20,}' -e 'GOCSPX-[A-Za-z0-9_-]{10,}' -e 'REC_KEY=[A-Za-z0-9]{16,}' -e 'sk-ant-[A-Za-z0-9_-]{30,}' -- . ':!.github/workflows/check.yml' ':!docs/*' ':!*.md'; then
             echo "::error::something that looks like a key or token is committed"; bad=1
           fi
           exit $bad

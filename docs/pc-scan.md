@@ -24,6 +24,10 @@ For older footage, or recordings you only have on your PC: open `pc-tools/scan.h
 - **Opened from the dashboard:** the first scan asks your server to download the speech library once (about 25 MB, at the next cron run). The server records a checksum of every file and serves this frozen copy, so the page loads no code from other sites. See [security.md](security.md).
 - **Stand-alone version:** loads the library from jsDelivr directly.
 
+## AI summary
+
+When no Claude API key is set on the dashboard, the scan page offers *also write a summary with Chrome's built-in AI*: after the scan, it writes an [AI summary](ai-summary.md) on your PC (free, nothing is sent). The stand-alone version saves it as `ai_summary.md` in the folder.
+
 ## What you need
 
 - **Chrome or Edge on a desktop PC**, version 138 or newer.

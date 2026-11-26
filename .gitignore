@@ -10,6 +10,7 @@ server/channels.json
 server/channels.json.*
 server/moments.json
 server/moments.json.*
+server/summary_settings.json
 server/speech-lib/
 server/*.log
 server/cron_output.txt

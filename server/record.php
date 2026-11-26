@@ -89,6 +89,7 @@ const CHANNELS_FILE = __DIR__ . '/channels.json'; // the streamer list, edited f
 const MOMENTS_FILE  = __DIR__ . '/moments.json';  // YouTube "moments" rules, edited from the dashboard
 if (is_file(__DIR__ . '/moments.php')) require_once __DIR__ . '/moments.php';
 if (is_file(__DIR__ . '/scan.php')) require_once __DIR__ . '/scan.php';     // PC scan (subtitles, translation, spoken moments)
+if (is_file(__DIR__ . '/summary.php')) require_once __DIR__ . '/summary.php'; // AI summary of a stream
 const IO_SAMPLE_INTERVAL = 5; // seconds between IO measurements for the dashboard graph
 
 $argvList = $argv ?? ($_SERVER['argv'] ?? []);
@@ -2390,6 +2391,7 @@ function run_manager(): void
     process_conversions();
     if (function_exists('process_scans')) process_scans();
     if (function_exists('process_speech_lib')) process_speech_lib();
+    if (function_exists('process_summaries')) process_summaries();
     process_uploads();
     flock($lk, LOCK_UN);
 }
@@ -2557,6 +2559,9 @@ function finalize(array $s, string $display, string $chanDir): void
             . ($scanAsked ? ', after your PC-scan choice (at most ' . SCAN_WAIT_HOURS . ' h)' : '') . "\n";
     }
     if ($scanAsked) $summary .= "PC scan:          choose Scan or Skip on the dashboard (subtitles, translation, spoken moments)\n";
+    if (function_exists('summary_after_stream') && summary_after_stream($recDir)) {
+        $summary .= "AI summary:       written by Claude" . ($scanAsked ? ' after your PC-scan choice' : '') . " - it appears on the dashboard\n";
+    }
 
     write_meta($recDir, $s, $display, ['stream_ended' => date('Y-m-d H:i:s'), 'recorded_seconds' => round((float)$s['seconds'])]);
     embed_meta_in_chat($recDir);
