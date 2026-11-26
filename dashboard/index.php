@@ -45,7 +45,7 @@ header('Referrer-Policy: no-referrer');
 // Only the app's own scripts run: each page load gets a random nonce that its <script> tags carry.
 $nonce = rtrim(strtr(base64_encode(random_bytes(18)), '+/', '-_'), '=');
 header("Content-Security-Policy: default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; img-src data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
-header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), display-capture=(), screen-wake-lock=(self)');
+header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), midi=(), display-capture=(), screen-wake-lock=(self)');
 header('Cross-Origin-Opener-Policy: same-origin');
 header('Cross-Origin-Resource-Policy: same-origin');
 /** Adds this page load's nonce to every <script> tag of a page we serve. */
@@ -1291,18 +1291,19 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   .acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
   .loghead { display: flex; align-items: baseline; gap: 10px; }
   .card.moments { margin-top: 18px; }
-  .mbody { padding: 12px 16px 16px; display: grid; gap: 12px; }
+  .mbody { padding: 12px 16px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .mhelp { margin: 0; color: var(--muted); font-size: 13px; }
   .mrules { display: grid; gap: 6px; }
   .mrule { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
   .mrule.off { opacity: .55; }
-  .mrule .mtxt { flex: 1; }
+  .mrule .mtxt { flex: 1; min-width: 0; }
   .marrow { color: var(--muted); }
   .mform, .mtest { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
   .mform select, .mform input, .mtest select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px; }
   .mform input[type=number] { width: 70px; }
-  .mform input:not([type]) { width: 190px; }
-  .mtest select { max-width: 520px; }
+  .mform input:not([type]) { width: 190px; max-width: 100%; }
+  .mform select { max-width: 100%; }
+  .mtest select { max-width: min(520px, 100%); }
   .mout { display: grid; gap: 6px; font-size: 13px; }
   .mout .k { color: var(--muted); }
   .mdesc { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; max-height: 240px; overflow: auto; }
@@ -1400,6 +1401,13 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   td { padding: 7px 0; border-top: 1px solid var(--line); vertical-align: top; }
   tr:first-child td { border-top: 0; }
   td.r { text-align: right; white-space: nowrap; padding-left: 10px; }
+  /* Phones: a recording's status and buttons go under its title instead of squeezing it. */
+  @media (max-width: 640px) {
+    .rectable tr:not(.confirm) td { display: block; }
+    .rectable tr:not(.confirm) td.r { text-align: left; white-space: normal; padding: 0 0 9px; border-top: 0; }
+    .rectable td.r > .pill, .rectable td.r > .rec-sub { display: inline-block; margin-right: 8px; }
+    .rectable .acts { justify-content: flex-start; flex-wrap: wrap; }
+  }
   .rec-title { font-weight: 550; }
   .rec-sub { color: var(--muted); font-size: 12px; }
   .pill { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: #222630; color: var(--muted); white-space: nowrap; }
@@ -2104,7 +2112,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
 
       const cols = el('div', 'cols');
       const recs = el('div', 'section'); recs.append(el('h3', null, 'Recordings (' + c.recording_count + ')'));
-      const table = el('table');
+      const table = el('table', 'rectable');
       if (!c.recordings.length) recs.append(el('div', 'rec-sub', 'None yet.'));
       c.recordings.forEach(r => {
         const tr = el('tr'); const a = el('td'); const b = el('td', 'r');

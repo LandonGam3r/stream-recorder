@@ -657,7 +657,13 @@
     const tf = await import(LIB);
     tf.env.allowLocalModels = false;
     // The speech engine's own files come from the same place as the library (your server, when opened from the dashboard).
-    try { tf.env.backends.onnx.wasm.wasmPaths = LIB_BASE; } catch (e) {}
+    // Each file gets its full address: the engine treats a plain prefix as a folder, which loses the "?lib=" of the server copy.
+    try {
+      tf.env.backends.onnx.wasm.wasmPaths = {
+        mjs: LIB_BASE + 'ort-wasm-simd-threaded.jsep.mjs',
+        wasm: LIB_BASE + 'ort-wasm-simd-threaded.jsep.wasm',
+      };
+    } catch (e) {}
     const m = MODELS[q];
     const files = {};
     const progress = p => {

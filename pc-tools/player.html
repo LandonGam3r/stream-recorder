@@ -681,11 +681,15 @@
   const gb = b => b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : (b / 1048576).toFixed(0) + ' MB';
   const safeName = n => n.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().slice(0, 120);
 
-  async function pickRoot(forceNew) {
+  async function pickRoot(forceNew, ui) {
     let root = forceNew ? null : await idb('get', 'dir').catch(() => null);
     if (root) {
-      let perm = await root.queryPermission({ mode: 'readwrite' });
-      if (perm !== 'granted') perm = await root.requestPermission({ mode: 'readwrite' });
+      let perm = await root.queryPermission({ mode: 'readwrite' }).catch(() => 'denied');
+      if (perm !== 'granted') {
+        // Chrome asks again after a restart; its question appears next to the address bar.
+        ui.busy('Allow access to your folder "' + root.name + '" in the question next to the address bar…', 0, '');
+        perm = await root.requestPermission({ mode: 'readwrite' }).catch(() => 'denied');
+      }
       if (perm !== 'granted') root = null;
     }
     if (!root) {
@@ -717,10 +721,18 @@
 
   async function downloadAndPlay(src, forceNewFolder) {
     const ui = remoteUi;
-    let root;
-    try { root = await pickRoot(forceNewFolder); }
-    catch (e) { if (e.name !== 'AbortError') ui.error('Could not open that folder: ' + e.message); return; }
-    const dir = await root.getDirectoryHandle(safeName((src.channel || 'stream') + ' ' + src.name), { create: true });
+    let root, dir;
+    try {
+      root = await pickRoot(forceNewFolder, ui);
+      ui.busy('Checking what is already on this PC…', 0, '');
+      dir = await root.getDirectoryHandle(safeName((src.channel || 'stream') + ' ' + src.name), { create: true });
+    } catch (e) {
+      if (e.name === 'AbortError') { ui.error(''); return; }   // folder picker closed
+      ui.error(root && e.name === 'NotFoundError'
+        ? 'Your download folder "' + root.name + '" can\'t be found anymore (moved or renamed?). Click Change folder and pick it again.'
+        : 'Could not use that folder: ' + e.message + '. Click Change folder to pick it again.');
+      return;
+    }
     ui.busy('Downloading chat…', 0, '');
     dlAbort = new AbortController();
     const signal = dlAbort.signal;

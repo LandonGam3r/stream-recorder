@@ -2,6 +2,16 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.5.1] - 2026-11-26
+
+### Fixed
+- **PC scan failed to load the speech model** ("no available backend found … Failed to fetch dynamically imported module …/ort-wasm-simd-threaded.jsep.mjs"). The speech engine treats a file location as a folder and dropped the `?lib=` of the server copy introduced in 1.5.0. It now gets each file's full address. The checksum lock still applies.
+- **Player: "Download to this PC, then play" could hang without a message** when Chrome couldn't use the saved download folder (moved, renamed, or access not confirmed after a restart). It now says what's wrong and asks you to pick the folder again with *Change folder*. While Chrome waits for you to allow folder access, the player says so. A recording that's already on the PC is still not downloaded again; only the small files (chat, subtitles, translations, text version) are refreshed.
+- **Phone layout:**
+  - **Recordings list:** a recording's status and buttons now go under its title instead of squeezing the title to one letter per line.
+  - **YouTube moments card:** a long recording title in the test picker no longer makes the card wider than the screen.
+- **Browser console:** removed `bluetooth` from the Permissions-Policy header, which Chrome flagged as unrecognised.
+
 ## [1.5.0] - 2026-11-25
 
 Security and reliability release, from a full review of the application ([docs/security.md](docs/security.md)).
@@ -163,6 +173,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.5.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/LandonGam3r/stream-recorder/compare/v1.3.2...v1.3.3
