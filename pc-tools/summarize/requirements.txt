@@ -1,0 +1,6 @@
+# AI summary tool (summarize.py). Installed by Summarize.bat, or: py -m pip install -r requirements.txt
+yt-dlp            # reads YouTube/Twitch links, captions, chat replay
+faster-whisper    # speech recognition on your PC (also brings PyAV to read video)
+av                # pictures from the video
+Pillow            # resizes the pictures
+keyring           # keeps your Claude API key in Windows Credential Manager / macOS Keychain

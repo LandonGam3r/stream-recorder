@@ -611,7 +611,22 @@ def menu():
             print("\nStopped. Run again to continue unfinished uploads.")
 
 
+def move_old_files():
+    """Since 1.8.0 the uploader has its own folder (pc-tools/youtube-uploader). Sign-ins and settings
+    from the old place (pc-tools itself) are moved here once, so nothing has to be set up again."""
+    old = HERE.parent
+    if HERE.name != "youtube-uploader" or not (old / "README.md").exists():
+        return
+    names = ["client_secret.json", "accounts", "uploads.json", "config.json"] + [p.name for p in old.glob("youtube_setup_*.json")]
+    for name in names:
+        src, dst = old / name, HERE / name
+        if src.exists() and not dst.exists():
+            shutil.move(str(src), str(dst))
+            print(f"Moved {name} into the youtube-uploader folder.")
+
+
 def main():
+    move_old_files()
     ap = argparse.ArgumentParser(description="Upload video folders to YouTube.")
     sub = ap.add_subparsers(dest="cmd")
     s = sub.add_parser("signin"); s.add_argument("account")

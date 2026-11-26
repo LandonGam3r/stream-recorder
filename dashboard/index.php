@@ -672,7 +672,7 @@ if (isset($_GET['play'])) {
     if (!$d || !is_file("$d/video.mp4")) not_found();
     if ($player === false) {
         header('Content-Type: text/plain; charset=utf-8');
-        echo 'player.html is missing: upload it next to this index.php (same file as pc-tools/player.html).';
+        echo 'player.html is missing: upload it next to this index.php (same file as pc-tools/player/player.html).';
         exit;
     }
     $base = strtok($_SERVER['REQUEST_URI'], '?') . '?ch=' . rawurlencode($_GET['ch']) . '&file=' . rawurlencode($_GET['play']) . '&name=';

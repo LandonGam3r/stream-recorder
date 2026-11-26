@@ -17,7 +17,7 @@ jobs:
           # Files that only exist on a real installation.
           for f in $(git ls-files); do
             case "$f" in
-              server/config.php|dashboard/config.php|*/secret/*|*.enc|*token_setup.txt|*anthropic_setup.txt|*dashboard_key*|*client_secret*.json|*youtube_setup_*.json|pc-tools/accounts/*|server/channels.json|server/recordings/*)
+              server/config.php|dashboard/config.php|*/secret/*|*.enc|*token_setup.txt|*anthropic_setup.txt|*dashboard_key*|*client_secret*.json|*youtube_setup_*.json|pc-tools/*/accounts/*|pc-tools/*/config.json|pc-tools/summarize/summaries/*|server/channels.json|server/recordings/*)
                 echo "::error file=$f::this file must not be in the repository"; bad=1 ;;
             esac
           done
@@ -57,9 +57,9 @@ jobs:
           node --check /tmp/scan.mjs
       - name: Players and scan pages are identical
         run: |
-          cmp dashboard/player.html pc-tools/player.html
-          cmp dashboard/scan.html pc-tools/scan.html
+          cmp dashboard/player.html pc-tools/player/player.html
+          cmp dashboard/scan.html pc-tools/scan/scan.html
       - name: Python syntax
-        run: python3 -m py_compile pc-tools/yt_uploader.py
+        run: python3 -m py_compile pc-tools/youtube-uploader/yt_uploader.py pc-tools/summarize/summarize.py
       - name: Shell syntax
         run: bash -n start-local.sh

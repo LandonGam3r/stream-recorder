@@ -18,12 +18,14 @@ server/last_run.txt
 server/STOP-CONVERSIONS.txt
 
 # PC tools: sign-ins, Google client secret, exported accounts, state
-pc-tools/client_secret.json
-pc-tools/accounts/
-pc-tools/youtube_setup_*.json
-pc-tools/config.json
-pc-tools/uploads.json
-pc-tools/__pycache__/
+pc-tools/**/client_secret.json
+pc-tools/**/accounts/
+pc-tools/**/youtube_setup_*.json
+pc-tools/**/config.json
+pc-tools/**/uploads.json
+pc-tools/summarize/summaries/
+pc-tools/summarize/.installed
+pc-tools/**/__pycache__/
 
 # OS / editor
 .DS_Store

@@ -8,9 +8,9 @@ A web host can't run speech recognition, but your PC can, in the browser on its 
 - **a readable text version** (`transcript.txt`): what the streamer said and the chat, in order, with times and translations;
 - **spoken-word moments** for YouTube: the rule type *Streamer says* finds words the streamer said, like *Chat message contains* does for chat ([dashboard.md → YouTube moments](dashboard.md#youtube-moments)).
 
-## Without the server: `pc-tools/scan.html`
+## Without the server: `pc-tools/scan/scan.html`
 
-For older footage, or recordings you only have on your PC: open `pc-tools/scan.html` from disk in Chrome or Edge, choose the recording folder, and start. It reads the sound straight from the MP4 (AAC or Opus; normal or fragmented) and writes the subtitle and translation files into that folder, where `player.html` finds them. See [pc-tools/README.md](../pc-tools/README.md#pc-scan-scanhtml-subtitles-and-translation).
+For older footage, or recordings you only have on your PC: open `pc-tools/scan/scan.html` from disk in Chrome or Edge, choose the recording folder, and start. It reads the sound straight from the MP4 (AAC or Opus; normal or fragmented) and writes the subtitle and translation files into that folder, where `player.html` finds them. See [pc-tools/README.md](../pc-tools/README.md#pc-scan-scanhtml-subtitles-and-translation).
 
 ## How the subtitles are timed
 

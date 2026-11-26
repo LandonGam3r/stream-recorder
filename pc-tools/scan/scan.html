@@ -10,7 +10,7 @@
   on the graphics card, translation with the translator built into Chrome/Edge).
   The same file works two ways:
   - opened from the dashboard (dashboard/scan.html): the sound comes from your server, results go back to it;
-  - opened from disk (pc-tools/scan.html): pick a recording folder; results are written into that folder,
+  - opened from disk (pc-tools/scan/scan.html): pick a recording folder; results are written into that folder,
     where the PC player finds them.
 -->
 <style>
@@ -368,6 +368,9 @@
       $('#startHint').textContent = done ? done + ' piece(s) were already scanned; it continues from there (same language and quality).' : '';
       $('#setup').hidden = false;
       setupSummary(true);
+      // Already has what was said (an earlier scan, or the summary tool): a summary can be written right away.
+      const segs = this.transcript && Array.isArray(this.transcript.segments) ? this.transcript.segments.length : 0;
+      if (segs) showSummaryOnly({ keepSetup: true, hasTranscript: true }); else $('#sumCard').hidden = true;
     },
     async saved() {
       const t = this.transcript || {};
@@ -1043,13 +1046,17 @@
     if (!has) $('#sumRow').title = 'Needs Chrome or Edge 138+ on a desktop computer';
     $('#sumOn').onchange = () => { try { localStorage.setItem('scan-summary', $('#sumOn').checked ? 'on' : 'off'); } catch (e) {} };
   }
-  function showSummaryOnly() {
-    $('#setup').hidden = true;
+  function showSummaryOnly(opt) {
+    opt = opt || {};
+    const hasTr = opt.hasTranscript != null ? opt.hasTranscript : !!(SRC && SRC.summary && SRC.summary.has_transcript);
+    if (!opt.keepSetup) $('#setup').hidden = true;
     $('#sumCard').hidden = false;
     const has = TEST ? !!TEST.summarizer : 'Summarizer' in self;
-    $('#sumHow').textContent = 'Chrome\'s built-in AI writes an overview of this stream on this PC, from '
-      + (SRC.summary.has_transcript ? 'what the streamer said (from the PC scan) and the chat' : 'the chat (there is no PC scan of this recording, so it can\'t use what the streamer said - scan it first for a better summary)')
-      + '. Nothing is sent anywhere. The first time, Chrome downloads its model (a few GB, once).';
+    $('#sumHow').textContent = (opt.keepSetup ? 'This folder already has what was said, so you can skip the scan: ' : '')
+      + 'Chrome\'s built-in AI writes an overview on this PC, from '
+      + (hasTr ? 'what was said and the chat' : 'the chat (there is no PC scan of this recording, so it can\'t use what the streamer said - scan it first for a better summary)')
+      + '. Nothing is sent anywhere. The first time, Chrome downloads its model (a few GB, once).'
+      + (LOCAL ? ' It is saved as ai_summary.md in the folder.' : '');
     if (!has) { $('#sumBtn').disabled = true; $('#sumHint').textContent = 'This browser has no built-in AI: use Chrome or Edge 138 or newer on a desktop computer.'; }
     $('#sumBtn').onclick = async () => {
       $('#sumBtn').disabled = true;

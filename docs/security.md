@@ -39,7 +39,7 @@ To report a problem, see [SECURITY.md](../SECURITY.md).
   - A later change on jsDelivr can never reach your dashboard. The scan page loads no code from any other site.
 - **Speech models:** they come from Hugging Face. They are data (weights and settings), not code.
 - **Your data:** the sound and text stay between your PC and your server.
-- **Stand-alone (`pc-tools/scan.html` from disk):** loads the library from jsDelivr directly. There's no dashboard or server key involved in that mode.
+- **Stand-alone (`pc-tools/scan/scan.html` from disk):** loads the library from jsDelivr directly. There's no dashboard or server key involved in that mode.
 
 **Downloads by the server**
 - **https only:** never other kinds of addresses (such as `file://`).
@@ -74,7 +74,7 @@ To report a problem, see [SECURITY.md](../SECURITY.md).
 | `REC_KEY` (cron line) | Unlocks the stored Twitch and YouTube tokens. |
 | `secret/dashboard_key.txt` | The dashboard key. After your first login the dashboard offers a button to delete this plain copy; only its hash remains. |
 | `secret/dashboard_key.hash` | A valid login cookie can be computed from it. |
-| `pc-tools/client_secret.json`, exported `youtube_setup_*.json` | Upload access to your YouTube channel. |
+| `pc-tools/youtube-uploader/client_secret.json`, exported `youtube_setup_*.json` | Upload access to your YouTube channel. |
 | Your Anthropic API key | Spends your API credit. It's stored encrypted (`secret/anthropic.enc`, needs `REC_KEY`); the dashboard never shows it again. Set a spend limit in the Claude Console. |
 
 ## Things to be aware of

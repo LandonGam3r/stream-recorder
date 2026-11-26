@@ -26,7 +26,7 @@ Plain PHP, no database, no framework, no build step. Upload two folders and add 
 - **Player with pop-out chat.** Watch a recording with chat docked or in a separate window (second screen). Search the chat by username or text and jump to any message. Preview pictures appear when you hover the seek bar, and your own messages and mentions are highlighted. Subtitles can be moved, resized and restyled. It downloads to your PC first for smooth playback, or streams.
 - **Optional YouTube upload.** Upload finished streams per streamer, resumable for files of any size. *Moments* rules scan chat and stream info (raids, hype bursts, a user's message, a category) and tag the title and description with timestamps. Any recording can also be uploaded by hand.
 - **Subtitles and translation (optional).** A PC scan recognises what the streamer says, in the browser on your own graphics card. It makes subtitles, translated subtitles and translated chat for the player, and spoken-word moments for YouTube. Also works stand-alone for footage on your PC ([details](docs/pc-scan.md)).
-- **AI summary of each stream (optional).** A written overview with a timeline and highlights, from what the streamer said, the chat and pictures from the video, so you can catch up on a missed stream. Written by Claude (well under 1 cent per stream) or, free, by Chrome's built-in AI on your PC ([details](docs/ai-summary.md)).
+- **AI summary of each stream (optional).** A written overview with a timeline and highlights, from what the streamer said, the chat and pictures from the video, so you can catch up on a missed stream. Written by Claude (well under 1 cent per stream) or, free, by Chrome's built-in AI on your PC ([details](docs/ai-summary.md)). A PC tool does the same for any YouTube or Twitch link.
 - **Optional ad-free recording.** Uses your own Twitch login where your account is ad-free (subscriptions/Turbo).
 - **Built for shared hosting.** Works within short process lifetimes, disk IO limits, memory limits and blocked ports; [details](docs/how-it-works.md).
 - **Secure by default.**
@@ -76,7 +76,7 @@ Open the address it prints, log in with the key it shows, and add a streamer. Ne
 | [How it works](docs/how-it-works.md) | Architecture, relay recording, conversion, files |
 | [Security](docs/security.md) | What's protected how, and what to keep private |
 | [Troubleshooting](docs/troubleshooting.md) | Log messages and common problems |
-| [PC tools](pc-tools/README.md) | Stand-alone player and YouTube folder uploader |
+| [PC tools](pc-tools/README.md) | Stand-alone player, PC scan, AI summary of links or folders, YouTube folder uploader |
 | [Changelog](CHANGELOG.md) | What changed in each version |
 
 ## Requirements

@@ -2,6 +2,27 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.8.0] - 2026-11-26
+
+### Added
+- **AI summary of any YouTube or Twitch link, or a recording folder, on your PC** (`pc-tools/summarize`, double-click `Summarize.bat`). It's the same kind of summary as on the dashboard, in English, saved as `ai_summary.md`.
+  - **What was said:** YouTube's captions when there are any, otherwise recognised on your PC with faster-whisper (graphics card with CUDA when available; resumes if stopped). A scanned folder's `transcript.json` is used as it is.
+  - **Chat:** YouTube's chat replay, the Twitch VOD's chat, or `chat.txt`.
+  - **Also:** chapters/categories, and a picture every few minutes from a low-quality download.
+  - **Claude (default):** the API key is asked once and kept in Windows Credential Manager (macOS Keychain). About 1 cent per few hours of stream with Claude Haiku 5.5; the cost is shown.
+  - **Free:** `--free` (or choice 2) prepares the folder for the scan page, where Chrome's built-in AI writes the summary.
+  - **Folders for links** are in the recorder's format (`chat.txt`, `meta.json`, `transcript.json`), so the player and the scan page open them too.
+- **Scan page:** a folder that already has `transcript.json` offers **Write summary** right away, without scanning again.
+
+### Changed
+- **`pc-tools` has one folder per tool:**
+  - `player/`
+  - `scan/`
+  - `summarize/`
+  - `youtube-uploader/`
+
+  The YouTube uploader moves its sign-ins and settings from the old place into its own folder on its first start.
+
 ## [1.7.1] - 2026-11-26
 
 ### Changed
@@ -221,6 +242,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.8.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.6.0...v1.6.1

@@ -71,12 +71,16 @@ The material above goes to Anthropic. Under Anthropic's [commercial terms](https
 
 ## Chrome's built-in AI (no API key)
 
-With no API key set, **Summarize** at a recording opens the scan page in summary mode; click **Write summary**. You can also tick *also write a summary* on the scan page, so it's made right after a scan. The stand-alone `pc-tools/scan.html` offers the same tick box and writes `ai_summary.md` into the folder.
+With no API key set, **Summarize** at a recording opens the scan page in summary mode; click **Write summary**. You can also tick *also write a summary* on the scan page, so it's made right after a scan. The stand-alone `pc-tools/scan/scan.html` offers the same tick box and writes `ai_summary.md` into the folder.
 
 - **Needs:** Chrome or Edge 138 or newer on Windows, macOS or Linux, a graphics card with more than 4 GB memory (or 16 GB RAM and 4 CPU cores), and about 22 GB free disk space. The first time, Chrome downloads its model (Gemini Nano; Phi in Edge), once.
 - **How:** the model only reads a few pages at a time, so the stream is summarised per 10 minutes, then those notes become the overview and the headline.
 - **Languages:** it reads English, German, Spanish, French and Japanese. For other languages it uses the English translation from the PC scan.
 - **No pictures**, and less detail than Claude. Nothing leaves your PC.
+
+## Any link or folder, from your PC
+
+The PC tool `pc-tools/summarize` makes the same kind of summary for a YouTube video or past live stream, a Twitch VOD, or any recording folder, without the server. It recognises the speech on your PC when there are no captions, and uses Claude (key kept in Windows Credential Manager) or prepares the folder for the free summary in the scan page. See [pc-tools/README.md](../pc-tools/README.md#ai-summary-of-a-link-or-folder-summarize).
 
 ## Files
 
