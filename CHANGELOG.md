@@ -2,6 +2,12 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.6.1] - 2026-11-26
+
+### Fixed
+- **PC scan looked stuck on long recordings.** While a piece is being recognised, the scan page now shows a running clock ("This piece: 3 min 20 s so far"). The time left only appears after a piece finished in the same session, so a scan that continues from an earlier one had no sign of life for minutes.
+- **Sound labels in subtitles.** Labels like "(upbeat music)", "(laughs)" or "*Applaus*" are now removed, not only ones starting with "music". With word timing a label could also be split over two lines ("(upbeat" … "music)"); those words are left out too.
+
 ## [1.6.0] - 2026-11-26
 
 ### Added
@@ -193,6 +199,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.6.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.4.0...v1.5.0

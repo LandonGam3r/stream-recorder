@@ -185,7 +185,8 @@
   // ------------------------------------------------------------ subtitles (same rules as the server's scan_tidy)
   /** Removes "[Musik]", "*Music*", "♪" and similar sound tags. */
   function stripTags(t) {
-    return String(t || '').replace(/[\[(*]\s*(?:musik|music|musique|música|muziek|musica|muzyka|BLANK_AUDIO)[^\])*]{0,20}[\])*]/giu, ' ')
+    // Sound labels from speech recognition: [Musik], (upbeat music), (laughs), *Applaus*, [BLANK_AUDIO] ...
+    return String(t || '').replace(/\[[^\][]{1,40}\]|\([^()]{1,40}\)|\*[^*]{1,40}\*/gu, ' ')
       .replace(/[♪♫]/g, ' ').replace(/\s+/g, ' ').trim();
   }
   /** Each line on screen only as long as it takes to read (1.5-7 s), placed at the end of an over-long stretch. */
@@ -727,6 +728,18 @@
 
   /** Words with their own times -> subtitle lines: a new line at a pause, at a sentence end, or when it gets long. */
   function wordsToLines(words, offset, end) {
+    // A sound label can be spread over several words ("(upbeat" "music)"): leave those words out.
+    const keep = [];
+    for (let i = 0; i < words.length; i++) {
+      const t = String(words[i].text || '').trim(), open = { '(': ')', '[': ']', '*': '*' }[t[0]];
+      if (open && !(t.length > 1 && t.endsWith(open))) {
+        let j = i + 1;
+        while (j < words.length && j - i < 8 && !String(words[j].text || '').trim().endsWith(open)) j++;
+        if (j < words.length && j - i < 8) { i = j; continue; }
+      }
+      keep.push(words[i]);
+    }
+    words = keep;
     const lines = [];
     let cur = null;
     const flush = () => { if (cur && cur.text.trim()) lines.push(cur); cur = null; };
@@ -870,8 +883,16 @@
       const samples = await B.samples(i, piece);
       await waitForModel(loading, i, total, q);
       const w0 = performance.now();
-      step('Piece ' + (i + 1) + ' of ' + total + ': recognising speech…', 100 * (i + 0.15) / total, eta(doneSecs, workSecs, totalSecs));
-      let segs = await transcribePiece(samples, start, end, spoken);
+      const label = 'Piece ' + (i + 1) + ' of ' + total + ': recognising speech…';
+      const tick = () => {
+        const secs = Math.round((performance.now() - w0) / 1000), took = secs >= 60 ? Math.floor(secs / 60) + ' min ' + secs % 60 + ' s' : secs + ' s';
+        step(label, 100 * (i + 0.15) / total, 'This piece: ' + took + ' so far · '
+          + (workSecs ? eta(doneSecs, workSecs, totalSecs) : 'the time left appears when this piece is done (a 10-minute piece usually takes 1–5 minutes)'));
+      };
+      tick();
+      const ticker = setInterval(tick, 1000);
+      let segs;
+      try { segs = await transcribePiece(samples, start, end, spoken); } finally { clearInterval(ticker); }
       if (canTr) {
         step('Piece ' + (i + 1) + ' of ' + total + ': translating…', 100 * (i + 0.85) / total, eta(doneSecs, workSecs, totalSecs));
         segs = await translateSegs(segs, spoken);

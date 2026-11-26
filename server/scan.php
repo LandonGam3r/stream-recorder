@@ -103,7 +103,8 @@ function scan_after_stream(string $dir, ?array $channelSettings): bool
 /** Removes "[Musik]", "*Music*", "♪" and similar sound tags speech recognition puts in the text. */
 function scan_strip_tags(string $t): string
 {
-    $t = preg_replace('/[\[(*]\s*(?:musik|music|musique|m\x{FA}sica|muziek|musica|muzyka|BLANK_AUDIO)[^\])*]{0,20}[\])*]/iu', ' ', $t) ?? $t;
+    // Sound labels from speech recognition: [Musik], (upbeat music), (laughs), *Applaus*, [BLANK_AUDIO] ...
+    $t = preg_replace('/\[[^\]\[]{1,40}\]|\([^()]{1,40}\)|\*[^*]{1,40}\*/u', ' ', $t) ?? $t;
     $t = str_replace(["\u{266A}", "\u{266B}"], ' ', $t);
     return trim(preg_replace('/\s+/u', ' ', $t) ?? $t);
 }
