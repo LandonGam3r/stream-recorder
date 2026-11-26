@@ -2,6 +2,8 @@
 
 A written overview of a stream, so you know what happened without watching it all. It appears on the dashboard at the recording: **Summary** opens it. Every time in it (`0:18:48`) opens the player at that moment, so you can check.
 
+**Read in a window** opens it large over the page (Esc closes it), with **Download** to save it as a text file.
+
 There are two ways to make one:
 
 | | Claude (default) | Chrome's built-in AI (free) |
@@ -30,6 +32,7 @@ Within a minute the recorder encrypts the key into `secret/anthropic.enc`, the s
 
 - **Summarize each stream automatically** (on): after a stream ends, and after the MP4 conversion, Claude writes the summary. If the PC scan is set to *Ask me*, it waits for your choice (at most `SCAN_WAIT_HOURS`), so it can use what the streamer said. With *Skip* it's made from the chat, categories and pictures.
 - **Include pictures from the video** (on): a picture every few minutes, plus one shortly after each category change. At most 48, 768 pixels wide. They let Claude see what game or scene was on screen.
+- **Length:** Claude may write up to 16,000 tokens (about 40 pages of text; a summary is usually far shorter). Only what it writes is paid for.
 - **Model:**
   - **Claude Haiku 5.5** (default): cheapest.
   - **Claude Sonnet 5.5**: writes better, and costs about 20 times as much (still around 10–20 cents per stream).

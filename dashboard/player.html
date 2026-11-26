@@ -96,6 +96,25 @@
   .chatbar button.on { border-color: var(--accent); color: var(--accent); }
   #cSubs { background: rgba(0,0,0,.4); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; font: inherit; font-size: 12px; padding: 3px 4px; margin-right: 4px; max-width: 170px; }
   video::cue { background: rgba(0,0,0,.7); font-size: 1.05em; }
+  /* Subtitles drawn by the player (movable, resizable, styled); the layer covers the video picture. */
+  #subLayer { position: absolute; pointer-events: none; }
+  #subBox { position: absolute; transform: translateX(-50%); max-width: 92%; text-align: center; pointer-events: auto; cursor: move;
+            touch-action: none; user-select: none; line-height: 1.32; white-space: pre-line; padding: 2px 4px; border-radius: 6px; border: 1px dashed transparent; }
+  #subBox:hover, #subBox.drag { border-color: rgba(255,255,255,.45); }
+  #subText { display: inline; padding: .08em .4em; border-radius: .18em; -webkit-box-decoration-break: clone; box-decoration-break: clone; paint-order: stroke fill; }
+  #subGrip { position: absolute; right: -6px; bottom: -6px; width: 14px; height: 14px; border-right: 3px solid rgba(255,255,255,.8); border-bottom: 3px solid rgba(255,255,255,.8); cursor: nwse-resize; display: none; }
+  #subBox:hover #subGrip, #subBox.drag #subGrip { display: block; }
+  #subPanel { position: absolute; right: 14px; bottom: 74px; z-index: 4; width: 280px; background: rgba(23,25,33,.97); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 13px; display: grid; gap: 8px; }
+  #subPanel[hidden] { display: none; }
+  #subPanel .sp-head { display: flex; justify-content: space-between; align-items: center; }
+  #subPanel label { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  #subPanel label > input[type=range] { flex: 1; }
+  #subPanel select { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
+  #subPanel input[type=color] { width: 30px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: none; }
+  #subPanel .sw { display: flex; gap: 4px; } #subPanel .sw button { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 1px solid var(--line); }
+  #subPanel p { margin: 0; color: var(--muted); font-size: 12px; }
+  #subPanel .sp-row { display: flex; gap: 6px; } #subPanel .sp-row button { flex: 1; font-size: 12px; }
+  #cSubStyle { background: rgba(0,0,0,.4); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; font: inherit; font-size: 12px; font-weight: 700; padding: 3px 7px; margin-right: 4px; }
   .msg.sys { color: #c9b8ff; background: rgba(155,135,255,.08); border-left: 3px solid var(--accent); padding: 4px 8px; margin: 3px 0; border-radius: 4px; }
   .msg.mod { color: var(--muted); font-style: italic; }
   .msg.act { font-style: italic; }
@@ -123,6 +142,18 @@
 <main>
   <div id="stage">
     <video id="video" playsinline></video>
+    <div id="subLayer"><div id="subBox" hidden title="Drag to move · drag the corner to resize"><span id="subText"></span><i id="subGrip"></i></div></div>
+    <div id="subPanel" hidden>
+      <div class="sp-head"><b>Subtitles</b><button id="spClose" title="Close">✕</button></div>
+      <label>Size <input type="range" id="spSize" min="40" max="300" step="5"><span id="spSizeV"></span></label>
+      <label>Font <select id="spFont"><option value="sans">Sans</option><option value="serif">Serif</option><option value="mono">Monospace</option><option value="rounded">Rounded</option></select></label>
+      <label>Text <input type="color" id="spColor"><span class="sw"><button data-c="#ffffff" style="background:#fff"></button><button data-c="#ffe14d" style="background:#ffe14d"></button><button data-c="#7ee8ff" style="background:#7ee8ff"></button></span></label>
+      <label>Outline <select id="spOutline"><option value="none">None</option><option value="thin">Thin</option><option value="thick">Thick</option><option value="shadow">Shadow</option></select><input type="color" id="spOutlineColor"></label>
+      <label>Background <select id="spBg"><option value="none">None</option><option value="box">Box</option><option value="line">Per line</option></select><input type="color" id="spBgColor"></label>
+      <label>Opacity <input type="range" id="spBgOp" min="0" max="100" step="5"><span id="spBgOpV"></span></label>
+      <p>Drag the subtitles to move them; drag their corner to resize. Saved in this browser.</p>
+      <div class="sp-row"><button id="spResetPos">Reset position</button><button id="spReset">Reset all</button></div>
+    </div>
     <div id="controls">
       <div id="seek" title="">
         <div class="track"><i id="seekBuf"></i><i id="seekPlay"></i></div>
@@ -139,6 +170,7 @@
         <span id="cTime">0:00 / 0:00</span>
         <span class="grow"></span>
         <select id="cSubs" title="Subtitles (from the PC scan)" style="display:none"></select>
+        <button id="cSubStyle" title="Subtitle style: size, colour, outline, background" style="display:none">Aa</button>
         <select id="cRate" title="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
         <button id="cFull" class="ic" title="Fullscreen (F)"></button>
       </div>
@@ -233,6 +265,96 @@
   let chatTr = null, chatTrLang = '', showTr = false;
   try { showTr = localStorage.getItem('stream-player-chat-tr') !== '0'; } catch (e) {}
   function langName(c) { if (!c) return ''; try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(c) || c; } catch (e) { return c; } }
+  // ------------------------------------------------------------ subtitle style: position, size, colours
+  const SUB_DEFAULT = { x: 0.5, y: 0.08, size: 100, font: 'sans', color: '#ffffff', outline: 'thin', outlineColor: '#000000', bg: 'line', bgColor: '#000000', bgOp: 55 };
+  let subPref = Object.assign({}, SUB_DEFAULT);
+  try { Object.assign(subPref, JSON.parse(localStorage.getItem('stream-player-subs-style') || '{}')); } catch (e) {}
+  let subTrack = null;
+  const subEl = id => document.getElementById(id);
+  const FONTS = { sans: 'system-ui, "Segoe UI", Roboto, Arial, sans-serif', serif: 'Georgia, "Times New Roman", serif', mono: 'ui-monospace, Consolas, "Courier New", monospace', rounded: '"Arial Rounded MT Bold", "Varela Round", "Nunito", system-ui, sans-serif' };
+  function subSave() { try { localStorage.setItem('stream-player-subs-style', JSON.stringify(subPref)); } catch (e) {} }
+  /** Keeps the layer on the visible picture (the video can have black bars), so positions and sizes follow it. */
+  function subFit() {
+    const v = subEl('video'), st = subEl('stage'), L = subEl('subLayer');
+    const er = v.getBoundingClientRect(), sr = st.getBoundingClientRect();
+    let w = er.width, h = er.height;
+    if (v.videoWidth && v.videoHeight) { const k = Math.min(er.width / v.videoWidth, er.height / v.videoHeight); w = v.videoWidth * k; h = v.videoHeight * k; }
+    Object.assign(L.style, { left: (er.left - sr.left + (er.width - w) / 2) + 'px', top: (er.top - sr.top + (er.height - h) / 2) + 'px', width: w + 'px', height: h + 'px' });
+    subEl('subBox').style.fontSize = Math.max(10, h * 0.05 * subPref.size / 100) + 'px';
+  }
+  function subApply() {
+    const p = subPref, box = subEl('subBox'), t = subEl('subText');
+    box.style.left = (p.x * 100) + '%'; box.style.bottom = (p.y * 100) + '%';
+    t.style.fontFamily = FONTS[p.font] || FONTS.sans;
+    t.style.color = p.color;
+    t.style.fontWeight = '600';
+    t.style.webkitTextStroke = p.outline === 'thin' ? '.09em ' + p.outlineColor : p.outline === 'thick' ? '.17em ' + p.outlineColor : '0';
+    t.style.textShadow = p.outline === 'shadow' ? '0 .06em .12em ' + p.outlineColor + ', 0 0 .25em ' + p.outlineColor : 'none';
+    const rgba = (hex, op) => { const n = parseInt(hex.slice(1), 16); return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + (op / 100) + ')'; };
+    const bg = p.bg === 'none' ? 'transparent' : rgba(p.bgColor, p.bgOp);
+    t.style.background = p.bg === 'line' ? bg : 'transparent';
+    box.style.background = p.bg === 'box' ? bg : 'transparent';
+    box.style.padding = p.bg === 'box' ? '.2em .6em' : '2px 4px';
+    subFit();
+    const u = (id, v) => { const e = subEl(id); if (e && document.activeElement !== e) e.value = v; };
+    u('spSize', p.size); subEl('spSizeV').textContent = p.size + '%'; u('spFont', p.font); u('spColor', p.color);
+    u('spOutline', p.outline); u('spOutlineColor', p.outlineColor); u('spBg', p.bg); u('spBgColor', p.bgColor);
+    u('spBgOp', p.bgOp); subEl('spBgOpV').textContent = p.bgOp + '%';
+  }
+  /** Text of the cues showing now (the VTT tags and escapes taken out). */
+  function subUpdate() {
+    const box = subEl('subBox'), cues = subTrack && subTrack.activeCues ? [...subTrack.activeCues] : [];
+    const txt = cues.map(c => String(c.text || '').replace(/<[^>]*>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')).join('\n').trim();
+    const preview = !txt && !subEl('subPanel').hidden;           // something to see while styling
+    subEl('subText').textContent = txt || (preview ? 'Subtitles look like this' : '');
+    box.hidden = !txt && !preview;
+  }
+  function subShow(track) {
+    if (subTrack) subTrack.oncuechange = null;
+    subTrack = track;
+    if (track) track.oncuechange = subUpdate;
+    subUpdate();
+  }
+  (function subSetup() {
+    const box = subEl('subBox'), grip = subEl('subGrip'), panel = subEl('subPanel');
+    let drag = null;
+    box.addEventListener('pointerdown', e => {
+      const L = subEl('subLayer').getBoundingClientRect();
+      drag = { mode: e.target === grip ? 'size' : 'move', x0: e.clientX, y0: e.clientY, p: Object.assign({}, subPref), w: L.width, h: L.height };
+      box.setPointerCapture(e.pointerId); box.classList.add('drag'); e.preventDefault(); e.stopPropagation();
+    });
+    box.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+      if (drag.mode === 'move') {
+        // The whole box stays on the picture.
+        const r = box.getBoundingClientRect(), hw = Math.min(0.5, r.width / 2 / drag.w), hh = Math.min(0.95, r.height / drag.h);
+        subPref.x = Math.min(1 - hw, Math.max(hw, drag.p.x + dx / drag.w));
+        subPref.y = Math.min(1 - hh, Math.max(0, drag.p.y - dy / drag.h));
+      } else {
+        subPref.size = Math.round(Math.min(300, Math.max(40, drag.p.size * (1 + (dx + dy) / 250))));
+      }
+      subApply();
+    });
+    const end = () => { if (drag) { drag = null; box.classList.remove('drag'); subSave(); } };
+    box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+    box.addEventListener('click', e => e.stopPropagation());       // not play/pause
+    box.addEventListener('dblclick', e => e.stopPropagation());    // not fullscreen
+    subEl('cSubStyle').addEventListener('click', e => { panel.hidden = !panel.hidden; e.currentTarget.blur(); subUpdate(); });
+    subEl('spClose').onclick = () => { panel.hidden = true; subUpdate(); };
+    const bind = (id, key, num) => subEl(id).addEventListener('input', e => { subPref[key] = num ? +e.target.value : e.target.value; subApply(); subSave(); });
+    bind('spSize', 'size', true); bind('spFont', 'font'); bind('spColor', 'color'); bind('spOutline', 'outline');
+    bind('spOutlineColor', 'outlineColor'); bind('spBg', 'bg'); bind('spBgColor', 'bgColor'); bind('spBgOp', 'bgOp', true);
+    panel.querySelectorAll('.sw button').forEach(b => b.onclick = () => { subPref.color = b.dataset.c; subApply(); subSave(); });
+    subEl('spResetPos').onclick = () => { subPref.x = SUB_DEFAULT.x; subPref.y = SUB_DEFAULT.y; subApply(); subSave(); };
+    subEl('spReset').onclick = () => { subPref = Object.assign({}, SUB_DEFAULT); subApply(); subSave(); };
+    panel.addEventListener('keydown', e => e.stopPropagation());   // typing here isn't a player shortcut
+    new ResizeObserver(subFit).observe(subEl('stage'));
+    subEl('video').addEventListener('loadedmetadata', subFit);
+    document.addEventListener('fullscreenchange', () => setTimeout(subFit, 50));
+    subApply();
+  })();
+
   /** subs: [{url, lang, original}], chatTrs: [{lang, text}] */
   function setupExtras(subs, chatTrs) {
     video.querySelectorAll('track').forEach(t => t.remove());
@@ -246,8 +368,11 @@
       sel.appendChild(new Option(t.label, String(i)));
     });
     sel.style.display = subs.length ? '' : 'none';
+    document.getElementById('cSubStyle').style.display = subs.length ? '' : 'none';
     const apply = () => {
-      [...video.textTracks].forEach((tt, i) => { tt.mode = String(i) === sel.value ? 'showing' : 'disabled'; });
+      // "hidden": the browser loads the cues but doesn't draw them; the player draws them (subtitle style).
+      [...video.textTracks].forEach((tt, i) => { tt.mode = String(i) === sel.value ? 'hidden' : 'disabled'; });
+      subShow(sel.value === 'off' ? null : video.textTracks[+sel.value]);
     };
     let pref = 'off';
     try { pref = localStorage.getItem('stream-player-subs') || 'off'; } catch (e) {}
@@ -661,9 +786,10 @@
   }
   // ------------------------------------------------------------ download to this PC, then play
   // Opened from the dashboard: offer to download first (smooth playback) or stream from the server.
-  // The download goes into a folder you pick once (remembered), in 8 MB pieces with retries, and is
-  // saved every 256 MB, so an interrupted download continues where it stopped.
-  const CHUNK = 8 * 1048576, BATCH = 256 * 1048576, PARALLEL = 3;
+  // The download goes into a folder you pick once (remembered), in 8 MB requests with retries, saved as
+  // 256 MB pieces that are joined at the end, so an interrupted download continues where it stopped.
+  const CHUNK = 8 * 1048576, PARALLEL = 3;
+  const PART = (window.PLAYER_TEST && window.PLAYER_TEST.part) || 256 * 1048576; // size of a saved piece
   let dlAbort = null;
 
   function idb(op, key, val) {
@@ -749,18 +875,34 @@
         if (!r.ok) throw new Error(name + ': HTTP ' + r.status);
         await writeText(dir, name, await r.text());
       }
-      // Video, resuming a partial download.
+      // Video. It's saved in pieces of 256 MB ("video-parts" folder) and joined into video.mp4 once at the
+      // end: Chrome copies a whole file each time something is added to it, which made long downloads
+      // slower and slower. An interrupted download keeps its finished pieces and continues from there.
       const fh = await dir.getFileHandle('video.mp4', { create: true });
-      let have = (await fh.getFile()).size;
+      let prefix = (await fh.getFile()).size;   // downloads started before 1.7.0 wrote straight into video.mp4
       let incomplete = true;
       try { await dir.getFileHandle('download-incomplete.txt'); } catch (e) { incomplete = false; }
-      if (have === src.size && !incomplete) { ui.busy('Already downloaded - opening…', 100, ''); }
+      if (prefix === src.size && !incomplete) { ui.busy('Already downloaded - opening…', 100, ''); }
       else {
-        if (have > src.size) have = 0;
+        if (prefix > src.size) prefix = 0;
         await writeText(dir, 'download-incomplete.txt', 'video.mp4 is not complete yet. Open the recording from the dashboard again to continue the download.\n');
+        const pdir = await dir.getDirectoryHandle('video-parts', { create: true });
+        const found = new Map();
+        for await (const [n, h] of pdir.entries()) {
+          const m = /^piece-(\d+)\.part$/.exec(n);
+          if (m && h.kind === 'file') found.set(+m[1], { name: n, size: (await h.getFile()).size });
+        }
+        // Finished pieces, in order from where video.mp4 ends; anything else (a piece cut off by a pause) goes.
+        const pieces = [];
+        let have = prefix;
+        while (found.has(have) && found.get(have).size === Math.min(PART, src.size - have) && have < src.size) {
+          const p = found.get(have); pieces.push(p.name); found.delete(have); have += p.size;
+        }
+        for (const p of found.values()) await pdir.removeEntry(p.name).catch(() => {});
         const t0 = performance.now(), start0 = have;
         const limit = Math.max(0, +(src.dl_limit_mb || 0)) * 1048576; // bytes per second, 0 = no cap
         const chunk = limit ? 2 * 1048576 : CHUNK, par = limit ? 2 : PARALLEL;
+        const url = src.video + '&save=1'; // tells the server a PC download runs (a YouTube upload waits meanwhile)
         let paceAt = performance.now();
         const pace = n => {   // reserve a start time synchronously, then wait for it
           if (!limit) return Promise.resolve();
@@ -769,40 +911,62 @@
           return at > now ? new Promise(r => setTimeout(r, at - now)) : Promise.resolve();
         };
         while (have < src.size) {
-          const w = await fh.createWritable({ keepExistingData: true });
-          await w.truncate(have);
-          await w.seek(have);
-          const batchEnd = Math.min(src.size, have + BATCH);
+          const pieceEnd = Math.min(src.size, have + PART);
+          const name = 'piece-' + String(have).padStart(13, '0') + '.part';
+          const w = await (await pdir.getFileHandle(name, { create: true })).createWritable(); // a new file: nothing to copy
+          let ok = false, got = have;
           try {
             // A steady pipeline: a few pieces in flight, written in order. With a speed cap (your host's
-            // disk IO limit, from the dashboard) the pieces are small and their start times evenly
-            // spaced, so the server reads at a constant rate instead of in bursts.
+            // disk IO limit, from the dashboard) the requests are small and evenly spaced, so the server
+            // reads at a constant rate instead of in bursts.
             let next = have;
             const queue = [];
             const launch = async () => {
-              const s0 = next, e0 = Math.min(next + chunk, batchEnd) - 1;
+              const s0 = next, e0 = Math.min(next + chunk, pieceEnd) - 1;
               next = e0 + 1;
               await pace(e0 - s0 + 1);
-              const p = fetchRange(src.video, s0, e0, signal);
+              const p = fetchRange(url, s0, e0, signal);
               p.catch(() => {}); // a pause cancels the rest; handled below
               return p;
             };
-            while (have < batchEnd) {
-              while (queue.length < par && next < batchEnd) { const j = launch(); j.catch(() => {}); queue.push(j); }
+            while (got < pieceEnd) {
+              while (queue.length < par && next < pieceEnd) { const j = launch(); j.catch(() => {}); queue.push(j); }
               const buf = await queue.shift();
               await w.write(buf);
-              have += buf.length;
+              got += buf.length;
               const secs = (performance.now() - t0) / 1000;
-              const rate = (have - start0) / Math.max(secs, 0.5);
-              ui.busy('Downloading video…', 100 * have / src.size,
-                gb(have) + ' of ' + gb(src.size) + ' · ' + (rate / 1048576).toFixed(1) + ' MB/s' +
+              const rate = (got - start0) / Math.max(secs, 0.5);
+              ui.busy('Downloading video…', 100 * got / src.size,
+                gb(got) + ' of ' + gb(src.size) + ' · ' + (rate / 1048576).toFixed(1) + ' MB/s' +
                 (limit ? ' (capped at ' + (limit / 1048576).toFixed(1) + ')' : '') +
-                (rate > 0 ? ' · ~' + Math.max(1, Math.round((src.size - have) / rate / 60)) + ' min left' : ''));
+                (rate > 0 ? ' · ~' + Math.max(1, Math.round((src.size - got) / rate / 60)) + ' min left' : ''));
             }
+            ok = true;
           } finally {
-            await w.close(); // saves what has been written so far
+            if (ok) await w.close(); else await w.abort().catch(() => {});
+            if (!ok) await pdir.removeEntry(name).catch(() => {});
           }
+          pieces.push(name);
+          have = pieceEnd;
         }
+        // Join the pieces into video.mp4, once. Needs free space for a second copy until it's done.
+        const w = await fh.createWritable({ keepExistingData: prefix > 0 });
+        try {
+          if (prefix > 0) { await w.truncate(prefix); await w.seek(prefix); }
+          let done = prefix;
+          for (const n of pieces) {
+            ui.busy('Putting the pieces together into video.mp4…', 100 * done / src.size, gb(done) + ' of ' + gb(src.size));
+            const f = await (await pdir.getFileHandle(n)).getFile();
+            await w.write(f);
+            done += f.size;
+          }
+          ui.busy('Saving video.mp4…', 100, '');
+          await w.close();
+        } catch (e) {
+          await w.abort().catch(() => {});
+          throw new Error('could not put the pieces together (' + e.message + ') - is there enough free disk space for a second copy?');
+        }
+        await dir.removeEntry('video-parts', { recursive: true }).catch(() => {});
         await dir.removeEntry('download-incomplete.txt').catch(() => {});
       }
       window.removeEventListener('beforeunload', warnLeave);

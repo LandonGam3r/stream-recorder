@@ -76,7 +76,9 @@ Each recording shows its title, date, length, files, size and status. Running co
 - **▶ Play** opens the player in a new tab:
   - **Download to this PC, then play** (Chrome/Edge). The speed is capped below your host's disk IO limit (`DOWNLOAD_LIMIT_MB`, default 80% of `IO_LIMIT_MB`), so it runs steadily instead of hitting the limit in bursts:
     - The first time, pick a folder (e.g. Videos); it's remembered.
-    - Each recording gets a subfolder with `video.mp4`, `chat.txt` and `meta.json`. It downloads in pieces with automatic retries, can be paused and continues where it stopped, then plays from your PC.
+    - Each recording gets a subfolder with `video.mp4`, `chat.txt` and `meta.json`. It downloads with automatic retries, can be paused and continues where it stopped, then plays from your PC.
+    - The video is saved in 256 MB pieces (a `video-parts` folder) that are joined into `video.mp4` at the end. So the speed stays the same however big the recording is. Joining needs free space for a second copy for a moment.
+    - While it downloads, a YouTube upload on the server waits (both read big files and share your host's IO limit); it continues by itself afterwards.
   - **Stream from the server**: plays right away, but can stutter on long or high-quality streams.
   - Other browsers get plain download links.
 - **Logs:** the *Recent log* box shows the last lines. *Full log* opens the whole log in a new tab, without the routine "offline" lines; *everything* includes them, and *download* saves it as a file. A log rotates at `LOG_MAX_MB`; *older part* opens the previous one.
@@ -105,6 +107,7 @@ Each recording shows its title, date, length, files, size and status. Running co
   - Opened from the dashboard, the player knows your name from the Twitch token.
   - Otherwise set it with ⚙ in the chat bar (remembered per browser).
 - **Subtitles and translated chat** after a [PC scan](pc-scan.md): a subtitles menu next to the speed control, and a *Translated* button in the chat bar (hover a message for the original).
+- **Subtitle style:** drag the subtitles anywhere on the picture, and drag their corner to make them bigger or smaller. **Aa** next to the subtitles menu sets the size, font, text colour, outline (thin, thick or shadow) and background (none, per line or a box, with colour and opacity). It's remembered in this browser, also in full screen; *Reset* puts it back.
 - **Chat sync ±** nudges chat if it feels early or late. Click a chat timestamp to jump there.
 - **Pop out chat** opens chat in its own window for a second screen, with the same search.
 - **Keys:** Space or K (play/pause), ←/→ (5 s), M (mute), F (fullscreen, also double-click), C (chat window).

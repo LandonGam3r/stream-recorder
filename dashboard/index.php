@@ -631,6 +631,11 @@ if (isset($_GET['file'])) {
     if ($name === 'video.mp4' && $partial && !isset($_GET['dl'])) { // players always ask with a Range; a plain download gets it all
         $end = min($end, $start + 8 * 1048576 - 1);
     }
+    // "Download to this PC" is running: a YouTube upload waits meanwhile (they'd share the host's IO limit).
+    if ($name === 'video.mp4' && isset($_GET['save'])) {
+        $mark = REC_DIR . '/recordings/.pc_download';
+        if (!is_file($mark) || time() - (int)filemtime($mark) > 15) @touch($mark);
+    }
     header('Content-Type: ' . $type);
     header('Accept-Ranges: bytes');
     header('Last-Modified: ' . gmdate('D, d M Y H:i:s', filemtime($path)) . ' GMT');
@@ -1411,6 +1416,16 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   .md p { margin: 6px 0; } .md ul { margin: 4px 0; padding-left: 20px; } .md li { margin: 3px 0; }
   .md .ts { font-variant-numeric: tabular-nums; color: var(--accent); margin-right: 4px; text-decoration: none; }
   .md a.ts:hover { text-decoration: underline; }
+  .reader { position: fixed; inset: 0; z-index: 100; background: rgba(5,6,9,.72); display: flex; justify-content: center; padding: 24px; }
+  .rbox { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(920px, 100%); display: flex; flex-direction: column; min-height: 0; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .rhead { display: flex; gap: 8px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .rhead .rtitle { flex: 1; min-width: 0; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rhead a.act { text-decoration: none; }
+  .rbody { overflow: auto; padding: 18px 26px 26px; }
+  .rbody .md { font-size: 15px; max-width: none; }
+  .rbody .md h3 { font-size: 20px; } .rbody .md h4 { font-size: 16px; }
+  .rbody .md h3, .rbody .md h4 { text-transform: none; letter-spacing: normal; color: var(--text); font-weight: 650; }
+  @media (max-width: 640px) { .reader { padding: 0; } .rbox { border-radius: 0; } .rbody { padding: 14px 16px 22px; } }
   .sumfoot { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
   header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
   .updated { color: var(--muted); font-size: 12px; }
@@ -2127,17 +2142,42 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     f.append(el('span', null, 'Written by ' + aiSource(ai) + (when ? ' · ' + when : '') + (ai.cost ? ' · about $' + ai.cost.toFixed(4) : '')
       + (ai.pictures ? ' · ' + ai.pictures + ' pictures' : '') + (ai.notes && ai.notes.length ? ' · ' + ai.notes.join('; ') : '')
       + '. AI can get details wrong - the times link to the player so you can check.'));
+    const read = el('button', 'act play', 'Read in a window'); read.title = 'Open the summary large, to read it comfortably';
+    read.onclick = () => { const x = aiCache[key]; if (x) openReader(c, r, x.text); };
     const again = el('button', 'act', 'Summarize again'); again.onclick = () => summarize(c, r);
     const k = lastData.ai_summary.key;
     const pc = el('button', 'act', 'Summarize on this PC'); pc.title = 'Free, with Chrome\'s built-in AI (shorter, no pictures)'; pc.onclick = () => summarize(c, r, true);
     const del = el('button', 'act del', 'Delete summary'); del.onclick = () => { if (confirm('Delete this summary?')) { openSummary = null; aiAction('delete', c.name, r.folder); } };
     const close = el('button', 'act', 'Close'); close.onclick = () => { openSummary = null; render(lastData); };
-    f.append(again);
+    f.append(read, again);
     if (k.set || k.pending) f.append(pc);
     f.append(del, close);
     td.append(f);
     if (aiErr[key]) td.append(el('div', 'del-err', aiErr[key]));
     return tr;
+  }
+
+  /** The summary large, over the page; Esc, the ✕ or a click beside it closes it. */
+  function openReader(c, r, text) {
+    const ov = el('div', 'reader'); ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true');
+    const box = el('div', 'rbox');
+    const head = el('div', 'rhead');
+    head.append(el('span', 'rtitle', (c.name + ' · ' + (r.started ? r.started.slice(0, 10) : '') + ' · ' + (r.title || r.folder))));
+    const dl = el('a', 'act', 'Download'); dl.title = 'Save the summary as a text file (Markdown)';
+    dl.href = '?ch=' + encodeURIComponent(c.name) + '&file=' + encodeURIComponent(r.folder) + '&name=ai_summary.md&dl=1';
+    const x = el('button', 'act', '✕ Close');
+    head.append(dl, x);
+    const body = el('div', 'rbody');
+    body.append(mdRender(text, r.playable ? '?ch=' + encodeURIComponent(c.name) + '&play=' + encodeURIComponent(r.folder) : null));
+    box.append(head, body); ov.append(box);
+    const close = () => { ov.remove(); document.body.style.overflow = ''; document.removeEventListener('keydown', esc); };
+    const esc = e => { if (e.key === 'Escape') close(); };
+    x.onclick = close;
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    document.addEventListener('keydown', esc);
+    document.body.style.overflow = 'hidden';
+    document.body.append(ov);
+    x.focus();
   }
 
   // ---- AI summary: settings card (built once; only its status is refreshed)

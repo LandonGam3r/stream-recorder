@@ -1988,6 +1988,14 @@ function process_uploads(): void
 {
     if (!file_exists(RECORDINGS_DIR . '/.upload_queue.json')) return;
     if (any_channel_recording()) return; // reading big files counts towards the host's IO limit
+    // A recording is being downloaded to a PC (the player touches this file): both read big files and
+    // share the host's IO limit, so the upload waits until the download is done (or paused).
+    $dl = RECORDINGS_DIR . '/.pc_download';
+    if (is_file($dl) && time() - (int)filemtime($dl) < 90) {
+        if (!is_file("$dl.noted")) { logmsg('YouTube upload waits: a recording is being downloaded to a PC (they share the IO limit)'); @touch("$dl.noted"); }
+        return;
+    }
+    @unlink("$dl.noted");
     $lk = fopen(RECORDINGS_DIR . '/.upload.lock', 'c');
     if (!$lk || !flock($lk, LOCK_EX | LOCK_NB)) return;
 

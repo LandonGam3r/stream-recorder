@@ -370,7 +370,7 @@ Write in English, as Markdown, with these sections:
 # <a short, specific headline for this stream>
 **In short:** 3 to 5 sentences: what the stream was about and how it went.
 ## Timeline
-One bullet per part of the stream, in order, each starting with its time as [h:mm:ss]. Use 6 to 20 bullets, depending on the length.
+One bullet per part of the stream, in order, each starting with its time as [h:mm:ss]. Use 6 to 30 bullets depending on the length (about one per 10 to 15 minutes), each one or two short sentences.
 ## Highlights
 3 to 8 bullets with the most notable, funny or important moments, each starting with [h:mm:ss].
 ## Chat
@@ -447,7 +447,7 @@ function summary_build_request(string $dir, array $meta, string $model): array
     $content[] = ['type' => 'text', 'text' => "\n## Chat (name: message, a time mark per minute)\n" . ($chatText !== '' ? $chatText : '(no chat)') . "\n</stream_material>\n\nWrite the summary now."];
     $params = [
         'model' => $model,
-        'max_tokens' => 4000,
+        'max_tokens' => 16000, // long streams get long timelines; only what's written is paid for
         'system' => summary_system_prompt(),
         'messages' => [['role' => 'user', 'content' => $content]],
     ];

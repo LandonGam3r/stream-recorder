@@ -11,7 +11,7 @@ You need your own small "app" at Google once. It's free, and it's what allows up
 3. **Hand it to the recorder:** put that file in the `secret/` folder next to `record.php`. The next run encrypts it with your `REC_KEY` and deletes the file. **Delete it from your PC too**: it grants upload access to the channel.
 4. **Choose it per streamer:** on the dashboard, pick `main` under *Upload to YouTube* for each streamer whose streams should go there.
 
-After a stream ends and is converted, the recorder uploads it in the background (`UPLOAD_BUDGET` seconds per run, only while nothing records by default). Alerts show the link when it's done, or any problem (expired sign-in, daily limit); it retries by itself. The recording stays where it is.
+After a stream ends and is converted, the recorder uploads it in the background (`UPLOAD_BUDGET` seconds per run, only while nothing records by default, and not while a recording is being downloaded to a PC with the player). Alerts show the link when it's done, or any problem (expired sign-in, daily limit); it retries by itself. The recording stays where it is.
 
 Forgot to switch it on? Use the **YouTube** button next to a recording on the dashboard to upload it afterwards (see [dashboard.md → Recordings](dashboard.md#recordings)).
 

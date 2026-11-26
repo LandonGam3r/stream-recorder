@@ -2,6 +2,19 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.7.0] - 2026-11-26
+
+### Added
+- **Subtitle style in the player.** Drag the subtitles anywhere on the picture and drag their corner to resize them. **Aa** sets the size, font, text colour, outline (thin, thick, shadow) and background (none, per line or box, with colour and opacity). Remembered per browser, works in full screen. The player now draws the subtitles itself instead of the browser.
+- **AI summary: Read in a window.** Opens the summary large over the dashboard, with **Download** to save it as a text file.
+
+### Fixed
+- **"Download to this PC" got slower and slower on big recordings.**
+  - **Cause:** Chrome copies the whole file every time something is added to it. The player saved every 256 MB into `video.mp4`, so at 5 GB each save meant copying 5 GB first, and at 20 GB, 20 GB. Measured: each save took about 4 seconds longer for every GB already downloaded.
+  - **Fix:** the video is now saved as separate 256 MB pieces, joined into `video.mp4` once at the end, so the speed stays the same throughout. A download started with an older version continues as usual.
+- **A YouTube upload slowed down a PC download of the same server.** Both read big files and share the host's IO limit. The upload now waits while a recording is being downloaded to a PC (it continues by itself afterwards, and the log says so).
+- **AI summary cut off on long streams.** Claude could write at most 4,000 tokens, which a detailed summary of a 6-hour stream outgrew. It now may write up to 16,000, with a slightly more compact timeline (about one point per 10–15 minutes). Use **Summarize again** for a summary that was cut off.
+
 ## [1.6.1] - 2026-11-26
 
 ### Fixed
@@ -199,6 +212,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.7.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.5.0...v1.5.1
