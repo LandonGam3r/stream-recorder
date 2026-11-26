@@ -2,6 +2,15 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.7.1] - 2026-11-26
+
+### Changed
+- **The player's download shows where the time goes:**
+  - **Speed:** over the last 30 seconds next to the average (the average alone hid dips).
+  - **Server:** how long your server takes per request.
+  - **Retries:** how many requests failed and were retried, with the last error.
+- **Under the speed cap, 4 requests are in flight instead of 2**, so a server that answers slowly can still reach the cap. The cap itself still limits the rate.
+
 ## [1.7.0] - 2026-11-26
 
 ### Added
@@ -212,6 +221,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.7.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.5.1...v1.6.0

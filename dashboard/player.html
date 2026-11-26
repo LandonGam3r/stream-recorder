@@ -86,6 +86,7 @@
   .dlbar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
   .dlstatus { font-variant-numeric: tabular-nums; min-height: 1.4em; margin: 8px 0; }
   .dlstatus.err { color: #ff8080; }
+  .dldiag { color: var(--muted); font-size: 12px; min-height: 1.2em; margin: -4px 0 8px; font-variant-numeric: tabular-nums; }
   #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #2a2d3b; border: 1px solid #3a3e50; padding: 10px 16px; border-radius: 10px; display: none; z-index: 9; max-width: 90vw; }
   /* chat styles (also injected into the pop-up) */
   .msg { padding: 3px 0; word-wrap: break-word; font-size: var(--chat-size, 14px); }
@@ -828,15 +829,21 @@
     return root;
   }
 
+  // Measured while downloading, shown under the progress: how long the server takes per request, and retries.
+  const dlStats = { times: [], retries: 0, lastErr: '' };
   async function fetchRange(url, start, end, signal) {
     for (let attempt = 1; ; attempt++) {
+      const t0 = performance.now();
       try {
         const r = await fetch(url, { credentials: 'same-origin', headers: { Range: 'bytes=' + start + '-' + end }, signal });
         if (r.status !== 206 && !(r.status === 200 && start === 0)) throw new Error('HTTP ' + r.status);
         const buf = new Uint8Array(await r.arrayBuffer());
         if (buf.length !== end - start + 1) throw new Error('got ' + buf.length + ' of ' + (end - start + 1) + ' bytes');
+        dlStats.times.push([(performance.now() - t0) / 1000, buf.length]);
+        if (dlStats.times.length > 30) dlStats.times.shift();
         return buf;
       } catch (e) {
+        if (!signal.aborted) { dlStats.retries++; dlStats.lastErr = e.message; }
         if (signal.aborted || attempt >= 6) throw e;
         await new Promise(res => setTimeout(res, 1000 * attempt * attempt)); // 1, 4, 9, 16, 25 s
       }
@@ -901,8 +908,10 @@
         for (const p of found.values()) await pdir.removeEntry(p.name).catch(() => {});
         const t0 = performance.now(), start0 = have;
         const limit = Math.max(0, +(src.dl_limit_mb || 0)) * 1048576; // bytes per second, 0 = no cap
-        const chunk = limit ? 2 * 1048576 : CHUNK, par = limit ? 2 : PARALLEL;
-        const url = src.video + '&save=1'; // tells the server a PC download runs (a YouTube upload waits meanwhile)
+        // With a cap, small requests evenly spaced; 4 in flight, so a server that answers slowly still reaches it.
+        const chunk = limit ? 2 * 1048576 : CHUNK, par = limit ? 4 : PARALLEL;
+        const url = src.video + '&save=1';
+        const recent = [[performance.now(), have]];   // for the speed over the last 30 s // tells the server a PC download runs (a YouTube upload waits meanwhile)
         let paceAt = performance.now();
         const pace = n => {   // reserve a start time synchronously, then wait for it
           if (!limit) return Promise.resolve();
@@ -934,12 +943,18 @@
               const buf = await queue.shift();
               await w.write(buf);
               got += buf.length;
-              const secs = (performance.now() - t0) / 1000;
-              const rate = (got - start0) / Math.max(secs, 0.5);
+              const now = performance.now();
+              recent.push([now, got]);
+              while (recent.length > 2 && now - recent[1][0] > 30000) recent.shift();
+              const rate = (got - recent[0][1]) / Math.max((now - recent[0][0]) / 1000, 0.5);       // last 30 s
+              const avg = (got - start0) / Math.max((now - t0) / 1000, 0.5);                         // this session
+              const tt = dlStats.times, per = tt.length ? tt.reduce((a, x) => a + x[0], 0) / tt.length : 0;
+              const mb = tt.length ? tt.reduce((a, x) => a + x[1], 0) / tt.length / 1048576 : 0;
               ui.busy('Downloading video…', 100 * got / src.size,
-                gb(got) + ' of ' + gb(src.size) + ' · ' + (rate / 1048576).toFixed(1) + ' MB/s' +
-                (limit ? ' (capped at ' + (limit / 1048576).toFixed(1) + ')' : '') +
-                (rate > 0 ? ' · ~' + Math.max(1, Math.round((src.size - got) / rate / 60)) + ' min left' : ''));
+                gb(got) + ' of ' + gb(src.size) + ' · ' + (rate / 1048576).toFixed(1) + ' MB/s now, ' + (avg / 1048576).toFixed(1) + ' on average' +
+                (limit ? ' (cap ' + (limit / 1048576).toFixed(1) + ')' : '') +
+                (avg > 0 ? ' · ~' + Math.max(1, Math.round((src.size - got) / avg / 60)) + ' min left' : ''),
+                per ? 'Your server answers in ' + per.toFixed(1) + ' s per ' + mb.toFixed(0) + ' MB request' + (dlStats.retries ? ' · ' + dlStats.retries + ' retried (last: ' + dlStats.lastErr + ')' : ' · no retries') : '');
             }
             ok = true;
           } finally {
@@ -1001,6 +1016,7 @@
     const other = document.createElement('button'); other.textContent = 'Change folder'; other.title = 'Pick another download folder';
     const bar = document.createElement('div'); bar.className = 'dlbar'; const fill = document.createElement('i'); bar.appendChild(fill);
     const status = document.createElement('div'); status.className = 'dlstatus';
+    const diagEl = document.createElement('div'); diagEl.className = 'dldiag';
     const detail = document.createElement('small');
     const stop = document.createElement('button'); stop.textContent = 'Pause download'; stop.style.display = 'none';
     stop.onclick = () => { if (dlAbort) dlAbort.abort(); };
@@ -1021,11 +1037,12 @@
     dl.onclick = () => go(false);
     other.onclick = () => go(true);
     st.onclick = () => loadRemote(src);
-    drop.append(h, p, row, bar, status, stop, detail);
+    drop.append(h, p, row, bar, status, diagEl, stop, detail);
     remoteUi = {
-      busy(msg, pct, sub) {
+      busy(msg, pct, sub, diag) {
         bar.style.display = ''; fill.style.width = (pct || 0).toFixed(1) + '%';
         status.textContent = msg + (sub ? ' ' + sub : ''); status.classList.remove('err');
+        diagEl.textContent = diag || '';
         stop.style.display = dlAbort ? '' : 'none';
       },
       error(msg) {
