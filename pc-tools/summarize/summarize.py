@@ -163,23 +163,76 @@ def sound_pieces(media: Path, start_at: float):
             yield (t0 or 0.0), np.concatenate(buf)
 
 
-def cuda_dlls() -> None:
-    """NVIDIA's libraries installed with pip (nvidia-cublas-cu12, nvidia-cudnn-cu12) aren't on Windows' search
-    path by themselves: add their folders, so the graphics card can be used without a separate CUDA install."""
-    if os.name != "nt" or not hasattr(os, "add_dll_directory"):
-        return
+def nvidia_dirs() -> list:
+    """Folders with NVIDIA's libraries installed with pip (nvidia-cublas-cu12, nvidia-cudnn-cu12), for this Python."""
     import site
-    for base in site.getsitepackages() + [site.getusersitepackages()]:
-        for d in Path(base).glob("nvidia/*/bin"):
-            try:
-                os.add_dll_directory(str(d))
+    bases = list(site.getsitepackages()) + [site.getusersitepackages()] + [p for p in sys.path if p.endswith("site-packages")]
+    out = []
+    for base in dict.fromkeys(bases):
+        for sub in ("bin", "lib"):
+            for d in Path(base).glob(f"nvidia/*/{sub}"):
+                if d.is_dir() and d not in out:
+                    out.append(d)
+    return out
+
+
+_DLL_HANDLES = []  # kept, so Windows keeps the folders on its list
+
+
+def cuda_dlls() -> None:
+    """NVIDIA's pip libraries aren't on Windows' search path by themselves: add their folders, so the graphics
+    card can be used without a separate CUDA install."""
+    if os.name != "nt":
+        return
+    for d in nvidia_dirs():
+        try:
+            if hasattr(os, "add_dll_directory"):
+                _DLL_HANDLES.append(os.add_dll_directory(str(d)))
+            if str(d) not in os.environ.get("PATH", ""):
                 os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
-            except OSError:
-                pass
+        except OSError:
+            pass
+    # Load them right away by full path: then it no longer matters how ctranslate2 searches for them later.
+    import ctypes
+    for d in nvidia_dirs():
+        for dll in sorted(d.glob("*.dll")):
+            if dll.name.lower().startswith(("cublaslt64", "cublas64", "cudnn64", "cudnn_")):
+                try:
+                    ctypes.WinDLL(str(dll))
+                except OSError:
+                    pass
+
+
+def gpu_report() -> str:
+    """What the tool sees of the graphics card setup, to find out why it isn't used."""
+    lines = [f"  Python: {sys.executable} ({sys.version.split()[0]})"]
+    try:
+        import ctranslate2
+        n = ctranslate2.get_cuda_device_count()
+        kinds = ""
+        if n:
+            try:
+                kinds = ", number formats: " + ", ".join(sorted(ctranslate2.get_supported_compute_types("cuda")))
+            except Exception as e:  # noqa: BLE001
+                kinds = f", number formats unknown ({str(e)[:200]})"
+        lines.append(f"  ctranslate2 {getattr(ctranslate2, '__version__', '?')}: {n} NVIDIA card(s) found{kinds}")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"  ctranslate2: {e}")
+    dirs = nvidia_dirs()
+    if not dirs:
+        lines.append("  NVIDIA libraries: none found for this Python - install them with exactly this command:")
+        lines.append(f'    "{sys.executable}" -m pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"')
+    for d in dirs:
+        names = sorted(f.name for f in d.iterdir() if f.suffix.lower() in (".dll", ".so") or ".so." in f.name)
+        lines.append(f"  {d}: {', '.join(names[:6]) or 'empty'}{' ...' if len(names) > 6 else ''}")
+    if dirs and not any(f.name.lower().startswith("cudnn") for d in dirs for f in d.iterdir()):
+        lines.append('  cuDNN is missing: install it with  py -m pip install "nvidia-cudnn-cu12==9.*"')
+    return "\n".join(lines)
 
 
 GPU_HINT = ("  To use your NVIDIA graphics card (much faster), install its libraries once:\n"
-            "    py -m pip install nvidia-cublas-cu12 \"nvidia-cudnn-cu12==9.*\"")
+            f"    \"{sys.executable}\" -m pip install nvidia-cublas-cu12 \"nvidia-cudnn-cu12==9.*\"\n"
+            "  Still not used after that? Run Summarize.bat --gpu-check and send what it shows.")
 
 
 def load_whisper(size: str, cpu_only: bool = False):
@@ -209,11 +262,36 @@ def load_whisper(size: str, cpu_only: bool = False):
         except Exception as e:
             last = e
             if device == "cuda" and any(w in str(e).lower() for w in ("cublas", "cudnn", "cuda", "dll", ".so")):
-                say(f"The graphics card can't be used ({str(e)[:120]}) - using the processor instead (slower).\n" + GPU_HINT)
+                say(f"The graphics card can't be used - using the processor instead (slower).\n  Reason: {str(e)[:400]}\n" + gpu_report() + "\n" + GPU_HINT)
                 tries = [t for t in tries if t[0] == "cpu"]
                 return load_whisper(size, cpu_only=True)
             continue
     raise UserError(f"The speech model could not be loaded: {last}")
+
+
+def gpu_check() -> None:
+    need("faster_whisper", "faster-whisper")
+    cuda_dlls()
+    say("Graphics card check\n" + gpu_report() + "\n")
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() == 0:
+            say("No NVIDIA card is visible to ctranslate2 (check the NVIDIA driver; nvidia-smi should list the card).")
+            return
+    except Exception:  # noqa: BLE001
+        return
+    import numpy as np
+    import faster_whisper as fw
+    for compute in ("float16", "int8_float32", "float32"):
+        try:
+            model = fw.WhisperModel("base", device="cuda", compute_type=compute)
+            segs, _ = model.transcribe(np.random.uniform(-0.1, 0.1, 32000).astype("float32"), language="en", beam_size=1)
+            list(segs)
+            say(f"  {compute}: works - summaries will use the graphics card.")
+            return
+        except Exception as e:  # noqa: BLE001
+            say(f"  {compute}: {str(e)[:400]}")
+    say("\nThe card could not be used. Send these lines along and it can be fixed.")
 
 
 def transcribe(media: Path, language: str | None, size: str, partial: Path, cpu_only: bool = False) -> tuple:
@@ -921,9 +999,12 @@ def main() -> None:
     ap.add_argument("--out", help="folder for link summaries (default: summaries next to this tool)")
     ap.add_argument("--forget-key", action="store_true", help="forget the stored API key and ask for a new one")
     ap.add_argument("--no-open", action="store_true", help="don't open the summary when done")
+    ap.add_argument("--gpu-check", action="store_true", help="check whether the NVIDIA graphics card can be used, and why not")
     args = ap.parse_args()
     try:
-        if args.target:
+        if args.gpu_check:
+            gpu_check()
+        elif args.target:
             run(args.target, args)
         else:
             interactive(args)

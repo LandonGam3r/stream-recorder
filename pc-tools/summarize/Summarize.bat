@@ -18,6 +18,16 @@ if errorlevel 1 (
     %PY% -m pip install --upgrade -r requirements.txt && copy /y requirements.txt .installed >nul
     echo.
 )
+rem An NVIDIA card makes speech recognition many times faster; its libraries are offered once, for this same Python.
+if exist .asked-gpu goto gpudone
+where nvidia-smi >nul 2>nul || goto gpudone
+%PY% -c "import nvidia.cublas, nvidia.cudnn" >nul 2>nul && goto gpudone
+echo You have an NVIDIA graphics card. With its libraries ^(about 1 GB^) speech recognition is many times faster.
+set /p GPU="Install them now? [Y/n] "
+if /i not "!GPU!"=="n" %PY% -m pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
+echo done> .asked-gpu
+echo.
+:gpudone
 rem YouTube downloads need Deno; ffmpeg gives one video file with sound. Offered once each (Windows installer, winget).
 where winget >nul 2>nul || goto run
 if exist .asked-tools goto run

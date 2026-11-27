@@ -65,7 +65,7 @@ Writes an [AI summary](../docs/ai-summary.md) of a **YouTube video or past live 
 What it gathers:
 - **What was said:**
   - YouTube's captions, when the video has them.
-  - Otherwise it's recognised on your PC with faster-whisper. The first time, it downloads the speech model (*small*, about 500 MB). An NVIDIA graphics card makes it many times faster; on the processor a long stream takes a while. For the card, install NVIDIA's libraries once: `py -m pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"` (about 1 GB). Without them, or when the card fails, the tool uses the processor by itself and says so. It shows the time left, and if you stop it, the next run continues where it stopped.
+  - Otherwise it's recognised on your PC with faster-whisper. The first time, it downloads the speech model (*small*, about 500 MB). An NVIDIA graphics card makes it many times faster; on the processor a long stream takes a while. For the card, install NVIDIA's libraries once: `py -m pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"` (about 1 GB). Without them, or when the card fails, the tool uses the processor by itself and says so. `Summarize.bat` offers to install them when it sees an NVIDIA card. Still not used? `Summarize.bat --gpu-check` shows why. It shows the time left, and if you stop it, the next run continues where it stopped.
   - A recording folder that was already scanned (`transcript.json`) is used as it is.
 - **The chat:** YouTube's chat replay of a past live stream, the Twitch VOD's chat, or the recording's `chat.txt`.
 - **Pictures:** a picture every few minutes, for links taken from a low-quality download (deleted afterwards unless `--keep-video`).

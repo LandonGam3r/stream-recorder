@@ -33,3 +33,4 @@ pc-tools/**/__pycache__/
 Thumbs.db
 .idea/
 .vscode/
+pc-tools/summarize/.asked-gpu
