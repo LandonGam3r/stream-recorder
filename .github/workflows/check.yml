@@ -84,7 +84,9 @@ jobs:
           docker run -d --name sr -e REC_KEY=ci0123456789abcdefgh -e TZ=Europe/Amsterdam -p 8080:8080 stream-recorder:test
           for i in $(seq 1 30); do curl -fs http://127.0.0.1:8080/ -o page.html && grep -q "Dashboard key" page.html && break; sleep 2; done
           grep -q "Dashboard key" page.html
-          docker logs sr | grep -q "Dashboard key ("
+          for i in $(seq 1 30); do docker logs sr 2>&1 | grep -q "Dashboard key (" && break; sleep 2; done
+          docker logs sr 2>&1 | sed 's/key (.*): .*/key (...): [hidden]/'
+          docker logs sr 2>&1 | grep -q "Dashboard key ("
           docker exec sr php -r '$s = json_decode(file_get_contents("/data/server/recordings/.settings.json"), true); exit(!empty($s["ffmpeg"]) && $s["rec_key"] === "ok" && $s["ext"]["gd"] && $s["ext"]["font"] ? 0 : 1);'
           docker exec sr sh -c 'test ! -e /opt/stream-recorder/server/config.php && test ! -e /opt/stream-recorder/server/secret'
           docker stop sr
