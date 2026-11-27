@@ -55,6 +55,7 @@ foreach ([
     'MAX_RECORDING_HOURS'     => 0,
     'LOG_MAX_MB'              => 5,
     'MOMENTS_QUOTE_CHAT'      => true,
+    'GAP_REPAIR'              => true,
     'DEBUG'                   => false,
 ] as $k => $v) {
     if (!defined($k)) define($k, $v);
@@ -90,6 +91,7 @@ const MOMENTS_FILE  = __DIR__ . '/moments.json';  // YouTube "moments" rules, ed
 require_once __DIR__ . '/platforms.php'; // Twitch, Kick, YouTube Live: streamer keys and live checks
 require_once __DIR__ . '/archive.php';   // text archive (delete footage, keep text) and storage rules
 require_once __DIR__ . '/streamdata.php'; // viewer counts, emotes, bookmarks, search
+require_once __DIR__ . '/gaps.php';       // fill holes (ad breaks, drops) from the Twitch VOD
 if (is_file(__DIR__ . '/moments.php')) require_once __DIR__ . '/moments.php';
 if (is_file(__DIR__ . '/scan.php')) require_once __DIR__ . '/scan.php';     // PC scan (subtitles, translation, spoken moments)
 if (is_file(__DIR__ . '/summary.php')) require_once __DIR__ . '/summary.php'; // AI summary of a stream
@@ -188,7 +190,7 @@ if (!flock($lock, LOCK_EX | LOCK_NB)) {
     if (!$playlistUrl) {
         exit(0);
     }
-    if (RECORD_CHAT && $P['platform'] === 'twitch') {
+    if (RECORD_CHAT) {
         $chat = chat_connect($channel);
     }
 
@@ -389,6 +391,7 @@ if (!$playlistUrl) {
     save_state($state);
     exit(0);
 }
+if (empty($state['quality']) && $qualityName !== '') $state['quality'] = $qualityName; // gap repair takes the same quality from the VOD
 if ($state['runs'] === 1) {
     logmsg("Recording quality: $qualityName");
     logmsg($GLOBALS['adStatus'] ?? 'Viewer: unknown');
@@ -405,7 +408,7 @@ $state['part'] = $state['part'] ?? count(glob("$recDir/parts/*.ts") ?: []);
 $video   = null;
 $newPart = ($state['session'] ?? null) !== $playlistUrl; // different session = possibly different timestamps
 $chatFile = RECORD_CHAT ? fopen($recDir . '/chat.txt', 'ab') : null;
-$chatSupported = $P['platform'] === 'twitch'; // Kick and YouTube chat: coming with their full support
+$chatSupported = true; // Twitch (IRC), Kick (Pusher), YouTube (polled)
 if (RECORD_CHAT && !$chat && $chatSupported) {
     $chat = chat_connect($channel);
 }
@@ -732,7 +735,7 @@ function gql(string $query, array $vars = [], bool $auth = false, int &$code = 0
         $headers[] = 'Authorization: OAuth ' . oauth_token();
     }
     $body = http_request(
-        'https://gql.twitch.tv/gql',
+        twitch_url('https://gql.twitch.tv/gql'),
         json_encode(['query' => $query, 'variables' => (object)$vars]),
         $headers,
         10,
@@ -950,7 +953,7 @@ function get_media_playlist_url(string $login, string &$chosen = '', bool $fresh
         'p'                          => random_int(100000, 999999),
     ]);
     $code = 0;
-    $master = http_get("https://usher.ttvnw.net/api/channel/hls/$login.m3u8?$q", 10, $code);
+    $master = http_get(twitch_url("https://usher.ttvnw.net/api/channel/hls/$login.m3u8?$q"), 10, $code);
     if ($master === null || $code !== 200) return null;
     $url = pick_variant($master, $chosen);
     if ($url) {
@@ -1047,18 +1050,34 @@ function parse_media_playlist(string $m3u8): array
 
 function chat_connect(string $channel): ?array
 {
+    // Kick: Pusher WebSocket; YouTube: polled (platforms.php).
+    $P = platform_parse($channel);
+    if ($P && $P['platform'] === 'kick') return kick_chat_connect((int)($GLOBALS['platformChat'] ?? 0));
+    if ($P && $P['platform'] === 'youtube') return youtube_chat_connect((string)($GLOBALS['platformVideo'] ?? ''));
+    $chat = ws_open(CHAT_HOST, '/', 'https://www.twitch.tv');
+    if (!$chat) return null;
+    $nick = 'justinfan' . random_int(10000, 99999);
+    foreach (['CAP REQ :twitch.tv/tags twitch.tv/commands', 'PASS SCHMOOPIIE', "NICK $nick", "JOIN #$channel"] as $cmd) {
+        ws_send($chat, $cmd);
+    }
+    return $chat;
+}
+
+/** Opens a WebSocket (TLS, port 443). Returns ['sock', 'raw', 'proto' => 'irc'] or null. */
+function ws_open(string $host, string $path, string $origin): ?array
+{
     $errno = 0;
     $errstr = '';
-    $ctx = stream_context_create(['ssl' => ['verify_peer' => true, 'verify_peer_name' => true, 'SNI_enabled' => true, 'peer_name' => CHAT_HOST]]);
-    $s = @stream_socket_client('ssl://' . CHAT_HOST . ':443', $errno, $errstr, 5, STREAM_CLIENT_CONNECT, $ctx);
+    $ctx = stream_context_create(['ssl' => ['verify_peer' => true, 'verify_peer_name' => true, 'SNI_enabled' => true, 'peer_name' => $host]]);
+    $s = @stream_socket_client('ssl://' . $host . ':443', $errno, $errstr, 5, STREAM_CLIENT_CONNECT, $ctx);
     if (!$s) {
         logmsg("Chat connect failed: $errstr ($errno)");
         return null;
     }
     stream_set_timeout($s, 5);
     $key = base64_encode(random_bytes(16));
-    fwrite($s, "GET / HTTP/1.1\r\nHost: " . CHAT_HOST . "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-        . "Sec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\nOrigin: https://www.twitch.tv\r\n\r\n");
+    fwrite($s, "GET $path HTTP/1.1\r\nHost: $host\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        . "Sec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\nOrigin: $origin\r\nUser-Agent: " . USER_AGENT . "\r\n\r\n");
 
     $resp = '';
     $deadline = microtime(true) + 5;
@@ -1072,13 +1091,8 @@ function chat_connect(string $channel): ?array
         fclose($s);
         return null;
     }
-    $chat = ['sock' => $s, 'raw' => (string)substr($resp, strpos($resp, "\r\n\r\n") + 4)];
+    $chat = ['sock' => $s, 'raw' => (string)substr($resp, strpos($resp, "\r\n\r\n") + 4), 'proto' => 'irc'];
     stream_set_blocking($s, false);
-
-    $nick = 'justinfan' . random_int(10000, 99999);
-    foreach (['CAP REQ :twitch.tv/tags twitch.tv/commands', 'PASS SCHMOOPIIE', "NICK $nick", "JOIN #$channel"] as $cmd) {
-        ws_send($chat, $cmd);
-    }
     return $chat;
 }
 
@@ -1109,6 +1123,7 @@ function ws_send(array $chat, string $text, int $opcode = 0x1): void
 /** Waits up to $timeout s for chat, appends parsed messages to $out. Sets $chat = null on disconnect. */
 function chat_collect(?array &$chat, array &$out, float $timeout): void
 {
+    if (($chat['proto'] ?? '') === 'ytpoll') { youtube_chat_collect($chat, $out, $timeout); return; }
     $r = [$chat['sock']];
     $w = $e = null;
     $sec = (int)$timeout;
@@ -1150,10 +1165,12 @@ function chat_collect(?array &$chat, array &$out, float $timeout): void
         if ($op === 0x9) {            // ping
             ws_send($chat, $payload, 0xA);
         } elseif ($op === 0x8) {      // close
-            logmsg('Chat closed by Twitch (will retry)');
+            logmsg('Chat closed by the server (will retry)');
             @fclose($chat['sock']);
             $chat = null;
             return;
+        } elseif (($op === 0x1 || $op === 0x0) && ($chat['proto'] ?? 'irc') === 'pusher') {
+            kick_chat_frame($chat, $payload, $out);
         } elseif ($op === 0x1 || $op === 0x0) {
             foreach (explode("\r\n", $payload) as $line) {
                 if ($line === '') continue;
@@ -1617,6 +1634,7 @@ function process_conversions(): void
             }
             foreach ($q as $dir => $j) {
                 if (($j['not_before'] ?? 0) > time()) continue; // waiting for disk space
+                if (function_exists('gaps_hold') && gaps_hold($dir)) continue; // holes are being filled from the VOD first
                 $job = [$dir, $j];
                 return;
             }
@@ -2317,6 +2335,7 @@ function write_meta(string $recDir, array $s, string $display, array $extra = []
         'video_start'    => !empty($s['video_start']) ? local_time_ms((float)$s['video_start']) : null,
         'timeline'       => $s['timeline'] ?? null, // [[video seconds, local time], ...] at each part start
         'changes'        => $s['changes'] ?? [],    // title/category changes during the stream
+        'quality'        => $s['quality'] ?? ($old['quality'] ?? null),
         'timezone'       => date_default_timezone_get(),
     ], $extra);
     file_put_contents($f, json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
@@ -2474,6 +2493,7 @@ function run_manager(): void
     manager_checks();
     process_secret_setups();
     check_token_health();
+    if (function_exists('process_gap_repairs')) process_gap_repairs();
     process_conversions();
     if (function_exists('process_scans')) process_scans();
     if (function_exists('process_speech_lib')) process_speech_lib();
@@ -2663,6 +2683,8 @@ function finalize(array $s, string $display, string $chanDir): void
     ]) . "\n";
 
     $yt = youtube_account();
+    write_meta($recDir, $s, $display, ['stream_ended' => date('Y-m-d H:i:s'), 'recorded_seconds' => round((float)$s['seconds'])]);
+    $gapsWait = function_exists('gaps_after_stream') && gaps_after_stream($recDir);
     $scanAsked = function_exists('scan_after_stream') && scan_after_stream($recDir, channel_settings((string)($GLOBALS['channel'] ?? '')));
     $converting = false;
     if (AUTO_CONVERT && video_sources($recDir)) {
@@ -2680,6 +2702,7 @@ function finalize(array $s, string $display, string $chanDir): void
         $summary .= "YouTube:          will be uploaded (private) to account '$yt'" . ($converting ? ' after MP4 conversion' : '')
             . ($scanAsked ? ', after your PC-scan choice (at most ' . SCAN_WAIT_HOURS . ' h)' : '') . "\n";
     }
+    if ($gapsWait) $summary .= "Gap repair:       holes (ad breaks, drops) are filled from Twitch's VOD first, then converted\n";
     if ($scanAsked) $summary .= "PC scan:          choose Scan or Skip on the dashboard (subtitles, translation, spoken moments)\n";
     if (function_exists('summary_after_stream') && summary_after_stream($recDir)) {
         $summary .= "AI summary:       written by Claude" . ($scanAsked ? ' after your PC-scan choice' : '') . " - it appears on the dashboard\n";

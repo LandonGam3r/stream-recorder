@@ -105,7 +105,7 @@
   // ---- data
   const get = async u => { if (!u) return null; const r = await fetch(u, { credentials: 'same-origin' }); return r.ok ? r.text() : null; };
   let chat = [], speech = [], summary = '', viewers = [], emotes = null, events = [], checkins = [];
-  const EMOTE_OK = /^https:\/\/(static-cdn\.jtvnw\.net|cdn\.betterttv\.net|cdn\.frankerfacez\.com|cdn\.7tv\.app|files\.kick\.com)\/[^\s"'<>]+$/;
+  const EMOTE_OK = /^https:\/\/(static-cdn\.jtvnw\.net|cdn\.betterttv\.net|cdn\.frankerfacez\.com|cdn\.7tv\.app|files\.kick\.com|yt3\.ggpht\.com)\/[^\s"'<>]+$/;
 
   function mapper() {
     const tl = (meta.timeline || []).map(([v, t]) => [v, parseLocal(t)]).filter(x => x[1] != null);

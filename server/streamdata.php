@@ -10,7 +10,7 @@
  */
 
 /** Emote pictures may only come from these sites (they are shown in the player). */
-const EMOTE_HOSTS = ['static-cdn.jtvnw.net', 'cdn.betterttv.net', 'cdn.frankerfacez.com', 'cdn.7tv.app', 'files.kick.com'];
+const EMOTE_HOSTS = ['static-cdn.jtvnw.net', 'cdn.betterttv.net', 'cdn.frankerfacez.com', 'cdn.7tv.app', 'files.kick.com', 'yt3.ggpht.com'];
 
 // ------------------------------------------------------------------ viewers
 
@@ -58,16 +58,18 @@ function emotes_save(string $recDir, array $e): void
     rename("$f.tmp", $f);
 }
 
-/** Adds Twitch emotes seen in chat; writes only when something is new. */
-function emotes_merge(string $recDir, array $twitch): void
+/** Adds emotes seen in chat (Twitch: id; Kick and YouTube: picture link); writes only when something is new. */
+function emotes_merge(string $recDir, array $seen): void
 {
-    if (!$twitch) return;
+    if (!$seen) return;
     $e = emotes_load($recDir);
-    $before = count($e['twitch']);
-    foreach ($twitch as $name => $id) {
-        if (preg_match('/^[A-Za-z0-9_]{1,80}$/', (string)$id) && count($e['twitch']) < 5000) $e['twitch'][(string)$name] = (string)$id;
+    $before = count($e['twitch']) + count($e['extra']);
+    foreach ($seen as $name => $id) {
+        $id = (string)$id;
+        if (emote_url_ok($id) && count($e['extra']) < 5000) $e['extra'][(string)$name] = $id;
+        elseif (preg_match('/^[A-Za-z0-9_]{1,80}$/', $id) && count($e['twitch']) < 5000) $e['twitch'][(string)$name] = $id;
     }
-    if (count($e['twitch']) !== $before) emotes_save($recDir, $e);
+    if (count($e['twitch']) + count($e['extra']) !== $before) emotes_save($recDir, $e);
 }
 
 function emote_url_ok(string $url): bool
@@ -265,7 +267,7 @@ function search_recordings(string $root, string $q, array $opts = []): array
                 $body = $m[2];
                 $name = '';
                 if (strpos($body, '** ') === 0) $body = substr($body, 3); // notices (subs, raids)
-                if (preg_match('/^([\p{L}\p{N}_]{1,40}): (.*)$/u', $body, $n)) { $name = $n[1]; $text = $n[2]; } else { $text = $body; }
+                if (preg_match('/^([\p{L}\p{N}_.-]{1,40}): (.*)$/u', $body, $n)) { $name = $n[1]; $text = $n[2]; } else { $text = $body; }
                 foreach ($pending as $k => $idx) {
                     $hits[$idx]['after'][] = $body;
                     if (count($hits[$idx]['after']) >= 2) unset($pending[$k]);

@@ -92,6 +92,13 @@ function platform_url(string $url): string
     return $t !== '' ? preg_replace('#^https://(www\.)?(kick\.com|youtube\.com)#', rtrim($t, '/') . '/$2', $url) : $url;
 }
 
+/** Twitch address; SR_TEST_BASE points it at a local test server (automated tests only). */
+function twitch_url(string $url): string
+{
+    $t = (string)getenv('SR_TEST_BASE');
+    return $t !== '' ? preg_replace('#^https://(gql\.twitch\.tv|usher\.ttvnw\.net)#', rtrim($t, '/') . '/$1', $url) : $url;
+}
+
 // ------------------------------------------------------------------ Kick
 
 /** Kick's channel information (unofficial, also used by kick.com itself). null on error; ['exists' => false] when unknown. */
@@ -118,7 +125,7 @@ function youtube_live(string $name, int &$code = 0): ?array
     if ($code === 404) return ['exists' => false];
     if ($html === null || $code !== 200) return null;
     $pr = null;
-    if (preg_match('/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var\s|<\/script>)/s', $html, $m)) $pr = json_decode($m[1], true);
+    $pr = json_object_after($html, 'ytInitialPlayerResponse');
     $display = preg_match('/<meta property="og:title" content="([^"]*)"/', $html, $t) ? html_entity_decode($t[1], ENT_QUOTES) : $name;
     $out = ['exists' => true, 'display' => $display, 'live' => false, 'blocked' => false];
     if (!$pr) {
@@ -136,6 +143,164 @@ function youtube_live(string $name, int &$code = 0): ?array
     $out['blocked'] = ($ps['status'] ?? '') === 'LOGIN_REQUIRED';
     $out['reason'] = (string)($ps['reason'] ?? '');
     return $out;
+}
+
+// ------------------------------------------------------------------ chat: Kick (Pusher WebSocket)
+
+/** Kick's public Pusher app (the one kick.com's own chat uses); config KICK_PUSHER_KEY overrides it if Kick changes it. */
+function kick_pusher_key(): string
+{
+    return defined('KICK_PUSHER_KEY') ? (string)KICK_PUSHER_KEY : '32cbd69e4b950bf97679';
+}
+
+function kick_chat_connect(int $chatroom): ?array
+{
+    if ($chatroom <= 0) { logmsg('Kick chat: no chat room id from Kick'); return null; }
+    $chat = ws_open('ws-us2.pusher.com', '/app/' . kick_pusher_key() . '?protocol=7&client=js&version=8.4.0&flash=false', 'https://kick.com');
+    if (!$chat) return null;
+    $chat['proto'] = 'pusher';
+    $chat['room'] = $chatroom;
+    return $chat;
+}
+
+/** One Pusher message from Kick: chat, subs, gifts, raids (hosts), bans. */
+function kick_chat_frame(array &$chat, string $payload, array &$out): void
+{
+    $e = json_decode($payload, true);
+    if (!is_array($e)) return;
+    $ev = (string)($e['event'] ?? '');
+    if ($ev === 'pusher:connection_established') {
+        ws_send($chat, json_encode(['event' => 'pusher:subscribe', 'data' => ['auth' => '', 'channel' => 'chatrooms.' . $chat['room'] . '.v2']]));
+        return;
+    }
+    if ($ev === 'pusher:ping') { ws_send($chat, json_encode(['event' => 'pusher:pong', 'data' => (object)[]])); return; }
+    $d = is_string($e['data'] ?? null) ? json_decode($e['data'], true) : ($e['data'] ?? null);   // Pusher sends data as a JSON string
+    if (!is_array($d)) return;
+    $msg = kick_chat_message($ev, $d);
+    if ($msg) $out[] = $msg;
+}
+
+/** A Kick event as a chat line: ['id', 'ts', 'text', 'emotes'] or null. Kept separate for the tests. */
+function kick_chat_message(string $ev, array $d): ?array
+{
+    $name = function ($n) { $n = (string)$n; return preg_match('/^[\p{L}\p{N}_]{1,40}$/u', $n) ? $n : (preg_replace('/[^A-Za-z0-9_]/', '', $n) ?: 'someone'); };
+    $ts = strtotime((string)($d['created_at'] ?? '')) ?: time();
+    $emotes = [];
+    $text = null;
+    switch (substr($ev, strrpos($ev, '\\') !== false ? strrpos($ev, '\\') + 1 : 0)) {
+        case 'ChatMessageEvent':
+            // Emotes arrive as [emote:37226:KEKW]: shown as their name, pictures from Kick's site.
+            $content = preg_replace_callback('/\[emote:(\d+):([A-Za-z0-9_]{1,60})\]/', function ($m) use (&$emotes) {
+                $emotes[$m[2]] = 'https://files.kick.com/emotes/' . $m[1] . '/fullsize';
+                return $m[2];
+            }, (string)($d['content'] ?? ''));
+            $text = $name($d['sender']['username'] ?? '') . ': ' . $content;
+            break;
+        case 'SubscriptionEvent':
+            $text = '** ' . $name($d['username'] ?? '') . ' subscribed' . (!empty($d['months']) ? ' (' . (int)$d['months'] . ' months)' : '');
+            break;
+        case 'GiftedSubscriptionsEvent':
+            $n = count((array)($d['gifted_usernames'] ?? []));
+            $text = '** ' . $name($d['gifter_username'] ?? '') . ' is gifting ' . $n . ' sub' . ($n === 1 ? '' : 's');
+            break;
+        case 'StreamHostEvent':
+            $text = '** ' . $name($d['host_username'] ?? '') . ' is raiding with ' . (int)($d['number_viewers'] ?? 0) . ' viewers';
+            break;
+        case 'UserBannedEvent':
+            $who = $name($d['user']['username'] ?? '');
+            $text = !empty($d['permanent']) ? "** $who was banned" : "** $who was timed out" . (!empty($d['duration']) ? ' for ' . ((int)$d['duration'] * 60) . 's' : '');
+            break;
+        case 'ChatroomClearEvent':
+            $text = '** Chat was cleared by a moderator';
+            break;
+        default:
+            return null;
+    }
+    $id = (string)($d['id'] ?? md5($ev . json_encode($d)));
+    return ['id' => $id, 'ts' => $ts, 'text' => clean_text($text), 'emotes' => $emotes];
+}
+
+// ------------------------------------------------------------------ chat: YouTube (polled, like youtube.com's own chat)
+
+function youtube_chat_connect(string $videoId): ?array
+{
+    if (!preg_match('/^[A-Za-z0-9_-]{6,20}$/', $videoId)) return null;
+    $code = 0;
+    $html = http_request(platform_url('https://www.youtube.com/live_chat?is_popout=1&v=' . $videoId), null,
+        ['User-Agent: ' . PLATFORM_UA, 'Accept-Language: en-US,en;q=0.9', 'Cookie: SOCS=CAI; CONSENT=YES+1'], 15, $code);
+    if ($html === null || $code !== 200) { logmsg("YouTube chat: page not available (HTTP $code)"); return null; }
+    $key = preg_match('/"INNERTUBE_API_KEY"\s*:\s*"([A-Za-z0-9_-]+)"/', $html, $m) ? $m[1] : '';
+    $ver = preg_match('/"INNERTUBE_CONTEXT_CLIENT_VERSION"\s*:\s*"([0-9.]+)"/', $html, $m) ? $m[1] : '2.20261101.00.00';
+    $cont = preg_match('/"continuation"\s*:\s*"([A-Za-z0-9_%-]{20,})"/', $html, $m) ? $m[1] : '';
+    if ($key === '' || $cont === '') { logmsg('YouTube chat: could not read the chat page (chat off, or YouTube refuses this server)'); return null; }
+    return ['proto' => 'ytpoll', 'key' => $key, 'ver' => $ver, 'cont' => $cont, 'next' => microtime(true), 'fails' => 0];
+}
+
+/** Waits up to $timeout seconds; when YouTube's next poll is due, asks it for new chat. */
+function youtube_chat_collect(?array &$chat, array &$out, float $timeout): void
+{
+    $wait = $chat['next'] - microtime(true);
+    if ($wait > 0) { usleep((int)(min($wait, $timeout) * 1e6)); if ($wait > $timeout) return; }
+    $code = 0;
+    $body = http_request(platform_url('https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?prettyPrint=false&key=' . rawurlencode($chat['key'])),
+        json_encode(['context' => ['client' => ['clientName' => 'WEB', 'clientVersion' => $chat['ver'], 'hl' => 'en']], 'continuation' => $chat['cont']]),
+        ['Content-Type: application/json', 'User-Agent: ' . PLATFORM_UA, 'Origin: https://www.youtube.com'], 10, $code);
+    $j = $body !== null && $code === 200 ? json_decode($body, true) : null;
+    $lc = $j['continuationContents']['liveChatContinuation'] ?? null;
+    if (!is_array($lc)) {
+        if (++$chat['fails'] >= 5) { logmsg("YouTube chat stopped answering (HTTP $code) - will retry"); $chat = null; return; }
+        $chat['next'] = microtime(true) + 5;
+        return;
+    }
+    $chat['fails'] = 0;
+    foreach ((array)($lc['actions'] ?? []) as $a) {
+        $m = youtube_chat_message((array)($a['addChatItemAction']['item'] ?? []));
+        if ($m) $out[] = $m;
+    }
+    $next = $lc['continuations'][0] ?? [];
+    $c = $next['invalidationContinuationData'] ?? $next['timedContinuationData'] ?? $next['reloadContinuationData'] ?? null;
+    if (!empty($c['continuation'])) $chat['cont'] = (string)$c['continuation'];
+    $chat['next'] = microtime(true) + max(1.5, min(10, ((int)($c['timeoutMs'] ?? 3000)) / 1000));
+}
+
+/** One YouTube chat item: messages, Super Chats, new and gifted memberships. Kept separate for the tests. */
+function youtube_chat_message(array $item): ?array
+{
+    $runs = function ($r, array &$emotes) {
+        $t = '';
+        foreach ((array)($r['runs'] ?? []) as $x) {
+            if (isset($x['text'])) { $t .= $x['text']; continue; }
+            $e = $x['emoji'] ?? null;
+            if (!is_array($e)) continue;
+            if (!empty($e['isCustomEmoji'])) {
+                $n = trim((string)($e['shortcuts'][0] ?? ''), ':');
+                $u = (string)($e['image']['thumbnails'][0]['url'] ?? '');
+                if (strpos($u, '//') === 0) $u = "https:$u";
+                if ($n !== '' && preg_match('/^[A-Za-z0-9_-]{1,60}$/', $n)) { $t .= $n; if (function_exists('emote_url_ok') && emote_url_ok($u)) $emotes[$n] = $u; }
+            } else {
+                $t .= (string)($e['emojiId'] ?? '');
+            }
+        }
+        return $t !== '' ? $t : (string)($r['simpleText'] ?? '');
+    };
+    $name = function ($r) { $n = ltrim((string)($r['simpleText'] ?? ''), '@'); $n = preg_replace('/[^\p{L}\p{N}_.-]+/u', '_', $n); return mb_substr($n !== '' ? $n : 'someone', 0, 40); };
+    $emotes = [];
+    $r = $item['liveChatTextMessageRenderer'] ?? null;
+    if (is_array($r)) $text = $name($r['authorName'] ?? []) . ': ' . $runs($r['message'] ?? [], $emotes);
+    elseif (is_array($r = $item['liveChatPaidMessageRenderer'] ?? null)) {
+        $msg = $runs($r['message'] ?? [], $emotes);
+        $text = '** ' . $name($r['authorName'] ?? []) . ' sent a Super Chat (' . ($r['purchaseAmountText']['simpleText'] ?? '?') . ')' . ($msg !== '' ? ": $msg" : '');
+    } elseif (is_array($r = $item['liveChatMembershipItemRenderer'] ?? null)) {
+        $text = '** ' . $name($r['authorName'] ?? []) . ' became a member' . (($h = $runs($r['headerSubtext'] ?? [], $emotes)) !== '' ? " ($h)" : '');
+    } elseif (is_array($r = $item['liveChatSponsorshipsGiftPurchaseAnnouncementRenderer'] ?? null)) {
+        $h = $r['header']['liveChatSponsorshipsHeaderRenderer'] ?? [];
+        $n = preg_match('/(\d+)/', $runs($h['primaryText'] ?? [], $emotes), $m) ? (int)$m[1] : 1;
+        $text = '** ' . $name($h['authorName'] ?? []) . " is gifting $n membership" . ($n === 1 ? '' : 's');
+    } else {
+        return null;
+    }
+    $ts = isset($r['timestampUsec']) ? ((int)$r['timestampUsec']) / 1e6 : time();
+    return ['id' => (string)($r['id'] ?? md5(json_encode($item))), 'ts' => $ts, 'text' => clean_text($text), 'emotes' => $emotes];
 }
 
 // ------------------------------------------------------------------ the recorder's view (same shape as Twitch)
@@ -176,6 +341,7 @@ function platform_stream_info(array $P)
         $stream = null;
         if (!empty($y['live']) && $y['hls'] !== '') {
             $GLOBALS['platformHls'] = $y['hls'];
+            $GLOBALS['platformVideo'] = (string)$y['video_id'];
             $stream = ['id' => preg_replace('/[^A-Za-z0-9_-]/', '', $y['video_id']) ?: '0', 'title' => clean_text($y['title']),
                 'createdAt' => $y['started'] ?: date('c'), 'game' => ['name' => '']];
         }
@@ -203,6 +369,26 @@ function platform_playlist(array $P, string &$chosen = '', bool $fresh = false):
     return $url;
 }
 
+/** The JSON object that follows "$marker = " in a page (braces counted, strings skipped), or null. */
+function json_object_after(string $html, string $marker): ?array
+{
+    if (!preg_match('/' . preg_quote($marker, '/') . '"?\]?\s*=\s*\{/', $html, $m, PREG_OFFSET_CAPTURE)) return null;
+    $start = $m[0][1] + strlen($m[0][0]) - 1;
+    $depth = 0;
+    $inStr = false;
+    for ($i = $start, $n = strlen($html); $i < $n; $i++) {
+        $c = $html[$i];
+        if ($inStr) { if ($c === '\\') $i++; elseif ($c === '"') $inStr = false; continue; }
+        if ($c === '"') $inStr = true;
+        elseif ($c === '{') $depth++;
+        elseif ($c === '}' && --$depth === 0) {
+            $j = json_decode(substr($html, $start, $i - $start + 1), true);
+            return is_array($j) ? $j : null;
+        }
+    }
+    return null;
+}
+
 // ------------------------------------------------------------------ access test (dashboard button)
 
 /**
@@ -221,21 +407,27 @@ function platform_access_test(): array
     } else {
         $rows['kick'] = ['ok' => false, 'detail' => 'Kick did not answer as expected (' . ($code ? "HTTP $code" : 'no connection') . ').'];
     }
-    // A channel that is live around the clock, to test the whole way to the video.
-    $code = 0;
-    $y = youtube_live('LofiGirl', $code);
+    // Channels that are live around the clock, to test the whole way to the video (the first one that is live counts).
+    $y = null;
+    $seen = [];
+    foreach (['LofiGirl', 'SkyNews', 'aljazeeraenglish', 'NASA', 'France24_en'] as $ch) {
+        $code = 0;
+        $y = youtube_live($ch, $code);
+        if ($y === null) { $seen[] = "$ch: " . ($code ? "HTTP $code" : 'no answer'); continue; }
+        if (!empty($y['blocked']) || (!empty($y['live']) && $y['hls'] !== '')) break;
+        $seen[] = "$ch: " . (empty($y['exists']) ? 'not found' : (($y['video_id'] ?? '') === '' ? 'no live video on its page' : 'not live' . (!empty($y['reason']) ? ' (' . $y['reason'] . ')' : '')));
+        $y = null;
+    }
     if ($y === null) {
-        $rows['youtube'] = ['ok' => false, 'detail' => 'YouTube did not answer (' . ($code ? "HTTP $code" : 'no connection') . ').'];
+        $rows['youtube'] = ['ok' => null, 'detail' => 'YouTube answers, but none of the test channels showed a live video (' . implode('; ', $seen) . '), so the video itself could not be tested. Try again later.'];
     } elseif (!empty($y['blocked'])) {
         $rows['youtube'] = ['ok' => false, 'detail' => 'YouTube asks this server to sign in ("confirm you\'re not a bot"): it treats data-centre servers that way. Recording YouTube Live from here won\'t work; the PC summary tool can still use the finished video.'];
-    } elseif (!empty($y['live']) && $y['hls'] !== '') {
+    } else {
         $c2 = 0;
         $m = http_request($y['hls'], null, ['User-Agent: ' . PLATFORM_UA], 15, $c2);
         $rows['youtube'] = ($m !== null && $c2 === 200 && strpos($m, '#EXTM3U') === 0)
-            ? ['ok' => true, 'detail' => 'YouTube answers this server, including the live video itself.']
+            ? ['ok' => true, 'detail' => 'YouTube answers this server, including the live video itself (tested on ' . $y['display'] . ').']
             : ['ok' => false, 'detail' => "YouTube shows the live page, but refuses the video itself (HTTP $c2)."];
-    } else {
-        $rows['youtube'] = ['ok' => null, 'detail' => 'YouTube answers, but the test channel is not live right now, so the video itself could not be tested. Try again later.'];
     }
     // Viewer counts: Twitch's own player API, asked for the biggest live stream right now.
     $code = 0;

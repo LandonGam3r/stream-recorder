@@ -392,6 +392,7 @@ function collect(): array
                 'text_only' => !empty($meta['footage_deleted']) ? ['when' => $meta['footage_deleted'], 'why' => $meta['footage_deleted_why'] ?? '', 'freed' => $meta['footage_bytes'] ?? 0] : null,
                 'keep_footage' => !empty($meta['keep_footage']),
                 'extras' => ai_extras_info($d),
+                'gaps' => is_file("$d/gaps.json") ? (function ($g) { return ['state' => $g['state'] ?? '', 'note' => $g['note'] ?? null, 'holes' => count($g['holes'] ?? []), 'missing' => $g['missing'] ?? 0, 'added' => $g['added'] ?? null]; })(read_json("$d/gaps.json")) : null,
             ];
         }
         $channels[] = [
@@ -3137,6 +3138,9 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
           const scanWait = r.scan && (r.scan.state === 'ask' || SCAN_ACTIVE.includes(r.scan.state)) && !r.upload.started;
           a.append(el('div', 'rec-sub', 'YouTube (' + r.upload.account + '): ' + (r.upload.started || r.upload.error ? pct + '%' : scanWait ? 'waits for the PC scan' : 'queued, starts at the next cron run when nothing is recording') + (r.upload.error ? ' · ' + r.upload.error : '')));
         }
+        if (r.gaps) a.append(el('div', 'rec-sub', 'Gap repair: ' + (r.gaps.state === 'pending' || r.gaps.state === 'working'
+          ? r.gaps.holes + ' hole(s), ' + hms(r.gaps.missing) + ' missing (ad breaks, drops) - filling them from the Twitch VOD' + (r.gaps.note ? ' · ' + r.gaps.note : '') + '; the MP4 conversion waits for it'
+          : (r.gaps.note || r.gaps.state))));
         if (r.text_only) a.append(el('div', 'rec-sub text-only', 'Text only: video deleted ' + (r.text_only.when || '').slice(0, 10) + (r.text_only.why && r.text_only.why.startsWith('storage rule') ? ' by the storage rule' : '') + ' · chat, transcript and summary kept'));
         if (r.scan) a.append(scanLine(c, r));
         if (r.ai && (r.ai.state !== 'done' || !r.ai.has_text)) a.append(aiLine(c, r));

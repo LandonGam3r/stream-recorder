@@ -1291,7 +1291,7 @@
   // FrankerFaceZ and 7TV emotes (picture links). Only pictures from those sites are shown.
   var emoteMap = null, emotesOn = true;
   try { emotesOn = localStorage.getItem('stream-player-emotes') !== '0'; } catch (e) {}
-  const EMOTE_OK = /^https:\/\/(static-cdn\.jtvnw\.net|cdn\.betterttv\.net|cdn\.frankerfacez\.com|cdn\.7tv\.app|files\.kick\.com)\/[^\s"'<>]+$/;
+  const EMOTE_OK = /^https:\/\/(static-cdn\.jtvnw\.net|cdn\.betterttv\.net|cdn\.frankerfacez\.com|cdn\.7tv\.app|files\.kick\.com|yt3\.ggpht\.com)\/[^\s"'<>]+$/;
   function setEmotes(text) {
     emoteMap = null;
     if (!text) return;

@@ -95,6 +95,18 @@ define('UPLOAD_CHUNK_MB', 16);
 // false = show only who wrote it, so nothing viewers type ends up in your description.
 define('MOMENTS_QUOTE_CHAT', true);
 
+// ---------------------------------------------------------------- gap repair (Twitch)
+
+// Holes in a recording (ad breaks when you get ads, missed segments, short drops) are filled from the
+// stream's Twitch VOD right after the stream, before the MP4 conversion. Needs the streamer to keep VODs
+// (most do; subscriber-only VODs work with your Twitch login when you are subscribed). false = leave holes.
+define('GAP_REPAIR', true);
+
+// ---------------------------------------------------------------- Kick
+
+// Kick's chat runs on a public Pusher app; its key is built in. Only if Kick changes it, put the new one here.
+// define('KICK_PUSHER_KEY', '32cbd69e4b950bf97679');
+
 // ---------------------------------------------------------------- PC scan
 
 // When a streamer's "PC scan" setting is "ask", its YouTube upload waits for your Scan/Skip choice
