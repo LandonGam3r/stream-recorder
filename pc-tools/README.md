@@ -48,6 +48,10 @@ It can also write an [AI summary](../docs/ai-summary.md) of the recording with C
 Writes an [AI summary](../docs/ai-summary.md) of a **YouTube video or past live stream**, a **Twitch VOD**, or a **recording folder** on your PC: headline, overview, timeline, highlights, the chat's mood and announcements, in English. It's saved as `ai_summary.md` in the folder; the times in it are positions in the video.
 
 1. **Python** 3.8 or newer (https://www.python.org/downloads/, tick **"Add python.exe to PATH"**). The first start installs what the tool needs (a few minutes, once): yt-dlp, faster-whisper, PyAV, Pillow and keyring.
+   - It then offers to install two free programs with Windows' own installer (winget), once:
+     - **Deno:** yt-dlp needs it for most YouTube downloads.
+     - **ffmpeg:** optional; it joins picture and sound into one video file.
+   - After an install, start `Summarize.bat` again.
 2. Double-click **Summarize.bat**, paste a link or drag a folder onto the window, press Enter.
 3. Choose **1 Claude** (default) or **2 Free**.
 
@@ -80,7 +84,9 @@ Defaults can go in `summarize/config.json`: `model`, `pictures`, `whisper_model`
 **Be aware:**
 - **Allowed videos only:** use it for your own videos and streams, or ones you have permission to download; YouTube's terms limit downloading.
 - **Twitch chat:** the tool fetches the chat replay the way Twitch's own website does. If Twitch changes that, the summary goes without chat and says so.
-- **Rare runs need updates:** if links stop working after a while, update yt-dlp with `py -m pip install -U yt-dlp`. Sites change often; yt-dlp keeps up.
+- **Without Deno**, YouTube offers yt-dlp only a few formats: the video download may fail. The summary then goes ahead with the captions and chat, without pictures, and the tool says so.
+- **Without ffmpeg**, picture and sound are downloaded as separate files (fine for the summary).
+- **If links stop working after a while**, update yt-dlp: `py -m pip install -U "yt-dlp[default]"`. Sites change often; yt-dlp keeps up.
 
 ## YouTube uploader (`youtube-uploader/yt_uploader.py`)
 

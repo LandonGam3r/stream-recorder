@@ -25,6 +25,7 @@ pc-tools/**/config.json
 pc-tools/**/uploads.json
 pc-tools/summarize/summaries/
 pc-tools/summarize/.installed
+pc-tools/summarize/.asked-tools
 pc-tools/**/__pycache__/
 
 # OS / editor

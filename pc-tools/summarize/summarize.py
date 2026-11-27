@@ -441,8 +441,12 @@ def from_link(url: str, cfg: dict, args, free: bool) -> Material:
     mat.url = url
     say("Reading the video's details...")
     base_opts = {"quiet": True, "no_warnings": True, "noprogress": True}
-    with ytdlp.YoutubeDL(base_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with ytdlp.YoutubeDL(base_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        raise UserError("Could not read that link: " + str(e).replace("ERROR: ", "")[:300]
+                        + "\nIs it public? If it worked before, update yt-dlp: py -m pip install -U \"yt-dlp[default]\"")
     if info.get("_type") == "playlist":
         raise UserError("That's a playlist or channel - give the link of one video.")
     site = str(info.get("extractor_key") or info.get("extractor") or "")
@@ -492,34 +496,61 @@ def from_link(url: str, cfg: dict, args, free: bool) -> Material:
     except Exception as e:
         say(f"\nCould not get the chat ({str(e)[:150]}) - the summary goes without it.")
 
-    # Video (low quality: for the speech, the pictures and the scan page).
-    want_video = free or not mat.speech or (cfg["pictures"] and not args.no_pictures)
-    if want_video:
-        existing = [p for p in folder.glob("video.*") if p.suffix.lower() in VIDEO_EXT]
-        if existing:
-            mat.video = existing[0]
-        else:
-            say("Downloading the video in low quality...")
-            has_ffmpeg = bool(shutil.which("ffmpeg"))
+    # Video and sound in low quality: for the pictures, the speech recognition (when there are no captions)
+    # and the scan page. YouTube often only offers picture and sound as separate files; joining them needs
+    # ffmpeg, so without it they're fetched separately (PyAV and faster-whisper read either).
+    want_pictures = free or (cfg["pictures"] and not args.no_pictures)
+    want_sound = not mat.speech
+    has_ffmpeg = bool(shutil.which("ffmpeg"))
+    mat.video = next((p for p in folder.glob("video.*") if p.suffix.lower() in VIDEO_EXT), None)
+    audio = next((p for p in folder.glob("audio.*") if p.suffix.lower() in VIDEO_EXT | {".m4a", ".webm", ".opus", ".mp3"}), None)
 
-            def hook(d):
-                if d.get("status") == "downloading":
-                    done, total = d.get("downloaded_bytes") or 0, d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                    progress(f"Downloading: {done / 1048576:.0f} MB" + (f" of {total / 1048576:.0f} MB" if total else ""))
-            opts = {**base_opts, "format": "best[height<=360][vcodec!=none][acodec!=none]/worst[vcodec!=none][acodec!=none]/worst",
-                    "outtmpl": str(folder / "video.%(ext)s"), "progress_hooks": [hook]}
-            if has_ffmpeg:
-                opts["postprocessors"] = [{"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"}]
+    def fetch(fmt: str, name: str, what: str, merge: bool = False):
+        say(f"Downloading {what} in low quality...")
+
+        def hook(d):
+            if d.get("status") == "downloading":
+                done, total = d.get("downloaded_bytes") or 0, d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                progress(f"Downloading {what}: {done / 1048576:.0f} MB" + (f" of {total / 1048576:.0f} MB" if total else ""))
+        opts = {**base_opts, "format": fmt, "outtmpl": str(folder / (name + ".%(ext)s")), "progress_hooks": [hook]}
+        if merge:
+            opts["merge_output_format"] = "mp4"
+        try:
             with ytdlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
-            say()
-            vids = [p for p in folder.glob("video.*") if p.suffix.lower() in VIDEO_EXT]
-            mat.video = vids[0] if vids else None
-            if free and mat.video and mat.video.suffix.lower() != ".mp4" and not has_ffmpeg:
-                say("Note: the scan page needs an .mp4 video. Install ffmpeg (winget install ffmpeg) and run this again.")
-    if not mat.speech and mat.video:
-        mat.speech, mat.speech_lang = transcribe(mat.video, args.language, args.whisper_model or cfg["whisper_model"], folder / "transcript.partial.json")
+        except Exception as e:
+            say(f"\nCould not download {what}: {str(e).replace('ERROR: ', '')[:200]}")
+            if site.lower().startswith("youtube") and not shutil.which("deno"):
+                say("  YouTube needs the program Deno for most downloads: run Summarize.bat again and let it install Deno,"
+                    "\n  or install it yourself (winget install DenoLand.Deno).")
+            return None
+        say()
+        return next((p for p in folder.glob(name + ".*") if p.suffix.lower() in VIDEO_EXT | {".m4a", ".webm", ".opus", ".mp3"}), None)
+
+    if has_ffmpeg and (want_pictures or want_sound) and not mat.video:
+        # One file with picture and sound (also plays in the player).
+        mat.video = fetch("bv*[height<=360]+ba/b[height<=360]/bv*+ba/b", "video", "the video", merge=True)
+    else:
+        if want_pictures and not mat.video:
+            mat.video = fetch("bv*[height<=360][ext=mp4]/bv*[height<=360]/wv*/b", "video", "the picture")
+        if want_sound and not audio and not mat.video:
+            audio = fetch("ba[ext=m4a]/ba/wa/b", "audio", "the sound")
+        elif want_sound and not audio and mat.video and not has_ffmpeg:
+            audio = fetch("ba[ext=m4a]/ba/wa/b", "audio", "the sound")  # the picture file may have no sound
+    if free and mat.video and (mat.video.suffix.lower() != ".mp4") and not has_ffmpeg:
+        say("Note: the scan page needs an .mp4 video in the folder. Install ffmpeg (winget install Gyan.FFmpeg) and run this again.")
+    if not mat.speech:
+        src = audio or mat.video
+        if not src:
+            raise UserError("There are no captions, and the sound could not be downloaded, so there's nothing to recognise."
+                            " Update yt-dlp (py -m pip install -U \"yt-dlp[default]\") and make sure Deno is installed, then try again.")
+        mat.speech, mat.speech_lang = transcribe(src, args.language, args.whisper_model or cfg["whisper_model"], folder / "transcript.partial.json")
         mat.speech_source = "speech recognition"
+    if audio and not free:
+        try:
+            audio.unlink()
+        except OSError:
+            pass
 
     # Files in the recorder's format: the player and the scan page can open this folder too.
     meta = {"channel": mat.channel, "title": mat.title, "stream_started": mat.started, "recorded_seconds": round(mat.duration),

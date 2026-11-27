@@ -78,7 +78,7 @@
       <label for="chatTr">Chat</label>
       <label class="row" style="color:var(--text)"><input type="checkbox" id="chatTr" checked> <span>also translate the chat</span></label>
       <label for="sumOn" id="sumLabel" hidden>AI summary</label>
-      <label class="row" id="sumRow" style="color:var(--text)" hidden><input type="checkbox" id="sumOn"> <span id="sumText">also write a summary with Chrome's built-in AI (free, on this PC)</span></label>
+      <label class="row" id="sumRow" style="color:var(--text)" hidden><input type="checkbox" id="sumOn"> <span>also write a summary with Chrome's built-in AI (free, on this PC)</span></label>
       <label for="quality">Speech recognition</label>
       <select id="quality">
         <option value="base">Fast (small model, ~150 MB)</option>
@@ -253,7 +253,9 @@
       if (st === 'done') $('#startHint').textContent = 'This recording was scanned before. Starting again reuses what is there for the same language and quality, and only adds what\'s missing (e.g. a new translation).';
       else if (done) $('#startHint').textContent = done + ' piece(s) were already scanned; it continues from there.';
       else if (st === 'preparing' || st === 'requested') $('#startHint').textContent = 'The server is preparing the sound; you can start already.' + (this.status.scan.note ? ' (' + this.status.scan.note + ')' : '');
-      setupSummary(true);
+      // With a Claude API key on the dashboard, Claude makes the summaries (automatically, or with the
+      // dashboard's Summarize button), so the scan page only offers Chrome's free one without a key.
+      setupSummary(!(SRC.summary && SRC.summary.server));
       if (SRC.summary && SRC.summary.only) { showSummaryOnly(); return; }
       if (!SRC.lib && !TEST) this.waitForLibrary();
     },
@@ -822,7 +824,7 @@
     try {
       // Translators first: Chrome only downloads a language pack right after a click.
       step('Preparing the translator…', 0);
-      if (wantSummary() && !byClaude()) prepareSummarizer(spoken); // also needs the click (Chrome may download its model)
+      if (wantSummary()) prepareSummarizer(spoken); // also needs the click (Chrome may download its model)
       await prepareTranslation(spoken, target, chat);
       await run(spoken, target === spoken ? '' : target, q, chat);
     } catch (e) {
@@ -918,15 +920,8 @@
     if (chat && target) chatNote = await translateChat(target, spoken);
     else await writeText(spoken, target, null);
     if (wantSummary()) {
-      try {
-        if (byClaude()) {
-          const r = await B.api('summary_claude');
-          log(r.already ? 'AI summary: Claude was already going to write it after this scan.' : 'AI summary: Claude writes it on your server now; it appears on the dashboard at this recording in a few minutes.', 'ok');
-        } else {
-          await writeSummary(spoken);
-          chatNote = (chatNote ? chatNote + ', ' : '') + 'the AI summary';
-        }
-      } catch (e) { log('AI summary: ' + e.message, 'warn'); }
+      try { await writeSummary(spoken); chatNote = (chatNote ? chatNote + ', ' : '') + 'the AI summary'; }
+      catch (e) { log('AI summary: ' + e.message, 'warn'); }
     }
     step('Done', 100, 'Took ' + Math.max(1, Math.round((performance.now() - t0) / 60000)) + ' min');
     notice('Done. ' + B.doneText.replace('{chat}', chatNote ? ', ' + chatNote : ''), 'ok');
@@ -1045,25 +1040,16 @@
   const SUM_LANGS = ['en', 'de', 'es', 'fr', 'ja'];
   let summarizers = null;
   const wantSummary = () => !$('#sumRow').hidden && $('#sumOn').checked;
-  // With a Claude API key on the dashboard, the server's Claude writes it after the scan (better, with pictures).
-  const byClaude = () => !!(SRC && SRC.summary && SRC.summary.server);
   function setupSummary(offer) {
-    const claude = byClaude();
-    const has = claude || (TEST ? !!TEST.summarizer : 'Summarizer' in self);
+    const has = TEST ? !!TEST.summarizer : 'Summarizer' in self;
     const show = offer && (LOCAL || !!(SRC && SRC.summary));
     $('#sumLabel').hidden = $('#sumRow').hidden = !show;
-    $('#sumText').textContent = claude
-      ? 'also let Claude write a summary afterwards (on your server, with pictures; about 1 cent with Haiku)'
-      : 'also write a summary with Chrome\'s built-in AI (free, on this PC)';
-    const prefKey = claude ? 'scan-summary-claude' : 'scan-summary';
     let pref = null;
-    try { pref = localStorage.getItem(prefKey); } catch (e) {}
-    // Claude: ticked unless this stream already has a summary (a new one costs again).
-    $('#sumOn').checked = show && has && pref !== 'off' && !(claude && SRC.summary.state === 'done');
+    try { pref = localStorage.getItem('scan-summary'); } catch (e) {}
+    $('#sumOn').checked = show && has && pref !== 'off';
     $('#sumOn').disabled = !has;
-    $('#sumRow').title = !has ? 'Needs Chrome or Edge 138+ on a desktop computer'
-      : claude && SRC.summary.state === 'done' ? 'This stream already has a summary; tick to have Claude write a new one with what was said' : '';
-    $('#sumOn').onchange = () => { try { localStorage.setItem(prefKey, $('#sumOn').checked ? 'on' : 'off'); } catch (e) {} };
+    if (!has) $('#sumRow').title = 'Needs Chrome or Edge 138+ on a desktop computer';
+    $('#sumOn').onchange = () => { try { localStorage.setItem('scan-summary', $('#sumOn').checked ? 'on' : 'off'); } catch (e) {} };
   }
   function showSummaryOnly(opt) {
     opt = opt || {};

@@ -1,5 +1,5 @@
 # AI summary tool (summarize.py). Installed by Summarize.bat, or: py -m pip install -r requirements.txt
-yt-dlp            # reads YouTube/Twitch links, captions, chat replay
+yt-dlp[default]   # reads YouTube/Twitch links, captions, chat replay (with yt-dlp-ejs, which YouTube needs)
 faster-whisper    # speech recognition on your PC (also brings PyAV to read video)
 av                # pictures from the video
 Pillow            # resizes the pictures

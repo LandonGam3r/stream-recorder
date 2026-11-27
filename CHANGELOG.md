@@ -2,6 +2,19 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.8.2] - 2026-11-27
+
+### Fixed
+- **Summary tool: YouTube links failed with "Requested format is not available".**
+  - **Cause:** the tool asked for one file with picture and sound, which YouTube often doesn't offer anymore. yt-dlp also needs the program Deno (and its yt-dlp-ejs part) for most YouTube formats.
+  - **Formats:** with ffmpeg, picture and sound are joined into one video. Without it, they're downloaded separately.
+  - **Failed video download:** the summary goes ahead with the captions and chat, without pictures, and the tool explains how to fix it. It only stops when there are neither captions nor sound.
+  - **Setup:** `yt-dlp[default]` is installed (with yt-dlp-ejs), and `Summarize.bat` offers once to install Deno and ffmpeg with winget.
+  - **Other errors:** a link that can't be read gives a short message instead of a long error.
+
+### Changed
+- **Scan page:** the *let Claude write a summary* tick box from 1.8.1 is gone again. With an API key, Claude makes summaries automatically after each stream (AI summaries card) or with **Summarize** at a recording; without a key the scan page still offers Chrome's free summary. The layout fixes stay.
+
 ## [1.8.1] - 2026-11-27
 
 ### Added
@@ -251,6 +264,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.8.2]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.7.0...v1.7.1
