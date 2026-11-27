@@ -2,6 +2,15 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.8.1] - 2026-11-27
+
+### Added
+- **Scan page: let Claude write the summary after the scan.** With a Claude API key on the dashboard, the tick box now reads *also let Claude write a summary afterwards*. When the scan is done, your server's Claude writes the summary with what was said, and it appears at the recording a few minutes later. It's ticked unless the stream already has a summary. Without a key it's still Chrome's free built-in AI.
+
+### Fixed
+- **Scan page layout:** with an API key set, the summary tick box showed up without its label and pushed the rest of the settings out of line. Its text also no longer wraps under the tick box.
+- **Scan page on phones:** the settings no longer run off the screen.
+
 ## [1.8.0] - 2026-11-26
 
 ### Added
@@ -242,6 +251,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.8.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.6.1...v1.7.0

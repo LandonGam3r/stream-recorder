@@ -26,7 +26,9 @@ For older footage, or recordings you only have on your PC: open `pc-tools/scan/s
 
 ## AI summary
 
-When no Claude API key is set on the dashboard, the scan page offers *also write a summary with Chrome's built-in AI*: after the scan, it writes an [AI summary](ai-summary.md) on your PC (free, nothing is sent). The stand-alone version saves it as `ai_summary.md` in the folder.
+The scan page can also have an [AI summary](ai-summary.md) written when the scan is done:
+- **With a Claude API key on the dashboard:** *also let Claude write a summary afterwards*. Your server's Claude writes it, now with what was said, and it appears at the recording a few minutes later. It's ticked unless the stream already has a summary, because a new one costs again.
+- **Without a key:** *also write a summary with Chrome's built-in AI*. It's written on your PC, free, and nothing is sent. The stand-alone version saves it as `ai_summary.md` in the folder.
 
 ## What you need
 

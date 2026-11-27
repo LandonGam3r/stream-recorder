@@ -767,6 +767,7 @@ if (isset($_GET['scan'])) {
             'server' => is_file(REC_DIR . '/secret/anthropic.enc') || is_file(REC_DIR . '/secret/anthropic_setup.txt'),
             'only' => isset($_GET['summary']),
             'has_transcript' => is_file("$d/transcript.json"),
+            'state' => (string)(read_json("$d/ai_summary.json")['state'] ?? ''),
         ] : null,
     ];
     // Import map: the browser refuses a library file whose checksum differs from the one recorded at download.
@@ -910,6 +911,17 @@ if (isset($_GET['scanapi'])) {
         $text = (string)($in['text'] ?? '');
         if ($text === '' || strlen($text) > 30 * 1048576) action_fail(400, 'Bad data.');
         file_put_contents("$d/transcript.txt", $text, LOCK_EX);
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'summary_claude') {
+        // After a PC scan: let Claude (on this server) write the summary, now with what was said.
+        if (!is_file(REC_DIR . '/summary.php')) action_fail(409, 'summary.php is missing in the recorder folder.');
+        require_once REC_DIR . '/summary.php';
+        if (!is_file(REC_DIR . '/secret/anthropic.enc') && !is_file(REC_DIR . '/secret/anthropic_setup.txt')) action_fail(409, 'No Claude API key is set on the dashboard.');
+        if (in_array((string)(summary_load($d)['state'] ?? ''), SUMMARY_ACTIVE, true)) { echo json_encode(['ok' => true, 'already' => true]); exit; }
+        summary_queue($d, 'after the PC scan');
+        $logLine('AI summary requested after the PC scan: ' . basename($d) . ' - Claude writes it at the next cron runs');
         echo json_encode(['ok' => true]);
         exit;
     }
