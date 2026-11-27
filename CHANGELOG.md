@@ -2,6 +2,16 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.8.3] - 2026-11-27
+
+### Fixed
+- **Summary tool: "Speech recognition failed: open() got an unexpected keyword argument 'metadata_errors'".**
+  - **Cause:** the newest PyAV dropped an option that faster-whisper still uses to read the sound.
+  - **Fix:** the tool now reads the sound itself, in 10-minute pieces. It uses far less memory on long streams, and a stopped run continues from the last finished piece.
+- **Summary tool: graphics card not used.** When the card can't do float16 (common on older cards), the tool now tries the formats it does support (int8, float32) before falling back to the processor.
+- **Summary tool: Twitch chat "failed integrity check".** The chat is now fetched page by page by position in the video, like Twitch's own player, instead of with cursors, which trigger Twitch's check. If Twitch still refuses, the summary goes ahead without chat, as before.
+- **Summary tool:** Hugging Face's warnings during the model download (symlinks on Windows, no login) are hidden.
+
 ## [1.8.2] - 2026-11-27
 
 ### Fixed
@@ -264,6 +274,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.8.3]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.7.1...v1.8.0

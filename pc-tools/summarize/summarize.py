@@ -42,6 +42,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# The speech model comes from Hugging Face; its warnings (symlinks on Windows, no login) aren't useful here.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+import warnings  # noqa: E402
+import logging  # noqa: E402
+warnings.filterwarnings("ignore", module="huggingface_hub")
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+
 HERE = Path(__file__).resolve().parent
 CONFIG_FILE = HERE / "config.json"
 API_BASE = os.environ.get("SUMMARIZE_TEST_BASE", "https://api.anthropic.com")  # changed only by tests
@@ -122,8 +129,67 @@ class Material:
 
 
 # ============================================================ speech recognition (faster-whisper)
-def transcribe(media: Path, language: str | None, size: str, partial: Path) -> tuple:
+PIECE = 600  # seconds of sound per piece: little memory, and a stopped run continues per piece
+
+
+def sound_pieces(media: Path, start_at: float):
+    """The sound as 16 kHz mono float32 pieces of PIECE seconds: (start, samples). Read with PyAV directly."""
+    av = need("av", "av")
+    np = need("numpy", "numpy")
+    with av.open(str(media)) as c:
+        if not c.streams.audio:
+            raise UserError(f"{media.name} has no sound.")
+        st = c.streams.audio[0]
+        if start_at > 0:
+            c.seek(int(start_at * 1_000_000), any_frame=False)
+        res = av.AudioResampler(format="flt", layout="mono", rate=16000)
+        buf, have, t0 = [], 0, None
+        size = PIECE * 16000
+        for frame in c.decode(st):
+            if t0 is None:
+                t0 = max(0.0, float(frame.time or 0.0))
+            for f in res.resample(frame):
+                a = f.to_ndarray().reshape(-1)
+                buf.append(a); have += len(a)
+            while have >= size:
+                whole = np.concatenate(buf)
+                yield t0, whole[:size]
+                t0 += PIECE
+                buf, have = [whole[size:]], len(whole) - size
+        for f in res.resample(None) or []:
+            a = f.to_ndarray().reshape(-1)
+            buf.append(a); have += len(a)
+        if have > 16000:
+            yield (t0 or 0.0), np.concatenate(buf)
+
+
+def load_whisper(size: str):
+    """The model on the graphics card when it can, in a number format the card supports; else the processor."""
     fw = need("faster_whisper", "faster-whisper")
+    tries = [("cpu", "int8")]
+    try:
+        import ctranslate2  # comes with faster-whisper
+        if ctranslate2.get_cuda_device_count() > 0:
+            tries = [("cuda", "float16"), ("cuda", "int8_float32"), ("cuda", "float32")] + tries
+    except Exception:
+        pass
+    say(f"Loading the speech model ({size}) - the first time it's downloaded (about 500 MB for small)...")
+    last = None
+    for device, compute in tries:
+        try:
+            model = fw.WhisperModel(size, device=device, compute_type=compute)
+            if device == "cuda":
+                import numpy as np
+                model.transcribe(np.zeros(16000, dtype="float32"), language="en")  # fails here when CUDA libraries are missing
+            say(f"Speech recognition on the {'graphics card' if device == 'cuda' else 'processor'} ({compute}).")
+            return model, device
+        except Exception as e:
+            last = e
+            continue
+    raise UserError(f"The speech model could not be loaded: {last}")
+
+
+def transcribe(media: Path, language: str | None, size: str, partial: Path) -> tuple:
     done, lang, start_at = [], language or "", 0.0
     try:  # continue an interrupted run
         p = json.loads(partial.read_text(encoding="utf-8"))
@@ -132,58 +198,31 @@ def transcribe(media: Path, language: str | None, size: str, partial: Path) -> t
             say(f"Continuing the speech recognition from {clock(start_at)}.")
     except (OSError, ValueError, KeyError):
         pass
-
-    def run(device: str, compute: str):
-        say(f"Loading the speech model ({size}) on the {'graphics card' if device == 'cuda' else 'processor'} - the first time it downloads it...")
-        model = fw.WhisperModel(size, device=device, compute_type=compute)
-        opts = dict(language=lang or None, vad_filter=True, condition_on_previous_text=False,
-                    beam_size=5 if device == "cuda" else 1)
-        if start_at > 0:
-            opts["clip_timestamps"] = [start_at]
-        try:
-            segments, info = model.transcribe(str(media), **opts)
-        except TypeError:  # an older faster-whisper without clip_timestamps: start over
-            opts.pop("clip_timestamps", None)
-            done.clear()
-            segments, info = model.transcribe(str(media), **opts)
-        return segments, info
-
-    devices = [("cuda", "float16"), ("cpu", "int8")]
+    model, device = load_whisper(size)
+    total = media_duration(media) or 1.0
+    t_start = time.time()
     try:
-        import ctranslate2  # comes with faster-whisper
-        if ctranslate2.get_cuda_device_count() < 1:
-            devices = devices[1:]
-    except Exception:
-        devices = devices[1:]
-    for i, (device, compute) in enumerate(devices):
-        got_any = False
-        try:
-            segments, info = run(device, compute)
-            lang = info.language or lang
-            total = float(info.duration or 0) or 1.0
-            t0, last_save = time.time(), time.time()
+        for offset, samples in sound_pieces(media, start_at):
+            segments, info = model.transcribe(samples, language=lang or None, vad_filter=True, condition_on_previous_text=False,
+                                              beam_size=5 if device == "cuda" else 1)
+            lang = lang or info.language  # the first piece decides, so later ones stay consistent
             for seg in segments:
-                got_any = True
                 text = (seg.text or "").strip()
                 if text:
-                    done.append((round(seg.start, 2), round(seg.end, 2), text))
-                spent = time.time() - t0
-                speed = (seg.end - start_at) / spent if spent > 1 else 0
-                left = (total - seg.end) / speed / 60 if speed > 0 else 0
-                progress(f"Recognising speech: {clock(seg.end)} of {clock(total)} ({100 * seg.end / total:.0f}%)"
+                    done.append((round(offset + seg.start, 2), round(offset + seg.end, 2), text))
+                now = offset + seg.end
+                spent = time.time() - t_start
+                speed = (now - start_at) / spent if spent > 1 else 0
+                left = (total - now) / speed / 60 if speed > 0 else 0
+                progress(f"Recognising speech: {clock(now)} of {clock(total)} ({min(100, 100 * now / total):.0f}%)"
                          + (f" - {speed:.1f}x real time, ~{max(1, round(left))} min left" if speed else ""))
-                if time.time() - last_save > 60:
-                    partial.write_text(json.dumps({"model": size, "file": media.name, "language": lang, "upto": seg.end, "segments": done}), encoding="utf-8")
-                    last_save = time.time()
-            say()
-            break
-        except UserError:
-            raise
-        except Exception as e:  # e.g. CUDA libraries missing: try the processor
-            if device == "cuda" and not got_any and i + 1 < len(devices):
-                say(f"\nThe graphics card can't be used ({str(e)[:120]}) - using the processor instead (slower).")
-                continue
-            raise UserError(f"Speech recognition failed: {e}")
+            partial.write_text(json.dumps({"model": size, "file": media.name, "language": lang, "upto": offset + len(samples) / 16000,
+                                           "segments": done}), encoding="utf-8")
+    except UserError:
+        raise
+    except Exception as e:
+        raise UserError(f"Speech recognition failed: {e}")
+    say()
     try:
         partial.unlink()
     except OSError:
@@ -324,35 +363,47 @@ def youtube_live_chat(path: Path) -> list:
     return out
 
 
-def twitch_chat(video_id: str) -> list:
-    """Chat replay of a Twitch VOD, page by page (Twitch's own web API, like its site)."""
-    out, cursor, pages = [], None, 0
-    while pages < 3000:
-        var = {"videoID": video_id, **({"cursor": cursor} if cursor else {"contentOffsetSeconds": 0})}
-        body = json.dumps([{"operationName": "VideoCommentsByOffsetOrCursor", "variables": var,
+def twitch_chat(video_id: str, duration: float) -> list:
+    """Chat replay of a Twitch VOD, page by page by position in the video (like Twitch's own player).
+    Paging with cursors runs into Twitch's integrity check; paging by position usually doesn't."""
+    out, seen, offset, empty = [], set(), 0, 0
+    headers = {"Client-ID": TWITCH_CLIENT_ID, "Content-Type": "text/plain;charset=UTF-8", "Origin": "https://www.twitch.tv",
+               "Referer": "https://www.twitch.tv/", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"}
+    while offset <= (duration or 10 ** 7) and empty < 3:
+        body = json.dumps([{"operationName": "VideoCommentsByOffsetOrCursor", "variables": {"videoID": video_id, "contentOffsetSeconds": int(offset)},
                             "extensions": {"persistedQuery": {"version": 1, "sha256Hash": "b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044aa76adf6a"}}}]).encode()
-        req = urllib.request.Request(TWITCH_GQL, data=body, headers={"Client-ID": TWITCH_CLIENT_ID, "Content-Type": "text/plain;charset=UTF-8"})
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(urllib.request.Request(TWITCH_GQL, data=body, headers=headers), timeout=30) as r:
             j = json.loads(r.read().decode("utf-8"))
         j = j[0] if isinstance(j, list) else j
         if j.get("errors"):
             raise RuntimeError(j["errors"][0].get("message", "error"))
         comments = (((j.get("data") or {}).get("video") or {}).get("comments")) or {}
         edges = comments.get("edges") or []
+        last = offset
+        new = 0
         for e in edges:
             n = e.get("node") or {}
+            key = n.get("id") or (n.get("contentOffsetSeconds"), (n.get("commenter") or {}).get("displayName"), str(n.get("message")))
+            t = float(n.get("contentOffsetSeconds", 0))
+            last = max(last, t)
+            if key in seen:
+                continue
+            seen.add(key); new += 1
             name = (n.get("commenter") or {}).get("displayName") or "?"
             text = "".join(f.get("text", "") for f in (n.get("message") or {}).get("fragments") or [])
             if text.strip():
-                out.append((float(n.get("contentOffsetSeconds", 0)), f"{name}: {text.strip()}"[:300]))
-        pages += 1
-        if pages % 20 == 0:
-            progress(f"Fetching the chat: {len(out)} messages, at {clock(out[-1][0]) if out else '0:00:00'}")
-        if not (comments.get("pageInfo") or {}).get("hasNextPage") or not edges:
+                out.append((t, f"{name}: {text.strip()}"[:300]))
+        progress(f"Fetching the chat: {len(out)} messages, at {clock(last)}")
+        if not edges:
+            empty += 1; offset += 30   # a quiet stretch: look a bit further
+            continue
+        empty = 0
+        offset = last if (new and last > offset) else offset + 1   # never stand still on a very busy second
+        if not (comments.get("pageInfo") or {}).get("hasNextPage") and not new:
             break
-        cursor = edges[-1].get("cursor")
-        time.sleep(0.1)
+        time.sleep(0.15)
     say()
+    out.sort(key=lambda x: x[0])
     return out
 
 
@@ -481,7 +532,7 @@ def from_link(url: str, cfg: dict, args, free: bool) -> Material:
     try:
         if site.lower().startswith("twitch"):
             say("Fetching the chat...")
-            mat.chat = twitch_chat(str(info.get("id", "")).lstrip("v"))
+            mat.chat = twitch_chat(str(info.get("id", "")).lstrip("v"), mat.duration)
         elif "live_chat" in (info.get("subtitles") or {}):
             say("Fetching the chat replay...")
             with ytdlp.YoutubeDL({**base_opts, "skip_download": True, "writesubtitles": True, "subtitleslangs": ["live_chat"],
