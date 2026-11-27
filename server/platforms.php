@@ -237,5 +237,25 @@ function platform_access_test(): array
     } else {
         $rows['youtube'] = ['ok' => null, 'detail' => 'YouTube answers, but the test channel is not live right now, so the video itself could not be tested. Try again later.'];
     }
+    // Viewer counts: Twitch's own player API, asked for the biggest live stream right now.
+    $code = 0;
+    $body = http_request('https://gql.twitch.tv/gql', json_encode(['query' => '{ streams(first: 1) { edges { node { viewersCount broadcaster { login } } } } }']),
+        ['Client-ID: kimne78kx3ncx6brgo4mv6wki5h1ko', 'Content-Type: application/json'], 10, $code);
+    $n = json_decode((string)$body, true)['data']['streams']['edges'][0]['node'] ?? null;
+    $rows['viewers'] = is_array($n) && isset($n['viewersCount'])
+        ? ['ok' => true, 'detail' => 'Twitch gives viewer counts (biggest stream now: ' . number_format((int)$n['viewersCount']) . ' viewers).']
+        : ['ok' => false, 'detail' => 'Twitch did not give a viewer count (' . ($code ? "HTTP $code" : 'no connection') . ').'];
+    // Emote pictures: the three emote services' lists of global emotes.
+    if (function_exists('emote_fetch')) {
+        $got = [];
+        foreach (['BetterTTV' => 'https://api.betterttv.net/3/cached/emotes/global', 'FrankerFaceZ' => 'https://api.frankerfacez.com/v1/set/global',
+            '7TV' => 'https://7tv.io/v3/emote-sets/global'] as $name => $url) {
+            $got[$name] = emote_fetch($url) !== null;
+        }
+        $ok = array_keys(array_filter($got));
+        $bad = array_keys(array_diff_key($got, array_flip($ok)));
+        $rows['emotes'] = ['ok' => $bad ? ($ok ? null : false) : true,
+            'detail' => trim(($ok ? 'Emote lists from ' . implode(', ', $ok) . ' work.' : '') . ($bad ? ' No answer from ' . implode(', ', $bad) . '.' : ''))];
+    }
     return $rows;
 }

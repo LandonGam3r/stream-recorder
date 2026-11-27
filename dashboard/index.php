@@ -2250,7 +2250,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     const usesOther = data.channels.some(c => c.platform && c.platform.platform !== 'twitch');
     const b = el('button', 'act', platBusy ? 'Testing…' : 'Test Kick / YouTube access');
     b.disabled = platBusy;
-    b.title = 'Checks whether this server can reach Kick and YouTube Live (they sometimes refuse web servers)';
+    b.title = 'Checks whether this server can reach Kick, YouTube Live, Twitch viewer counts and the emote services';
     b.onclick = async () => {
       platBusy = true; platErr = null; renderPlatTest(lastData);
       try { const j = await post('?platformtest=1', { op: 'run' }); lastData.platform_test = j.test; }
@@ -2261,7 +2261,8 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     row.append(b);
     if (t && t.rows) {
       Object.entries(t.rows).forEach(([k, r]) => {
-        const it = el('span', 'plat-res ' + (r.ok === true ? 'ok' : r.ok === false ? 'bad' : 'warn'), (k === 'kick' ? 'Kick' : 'YouTube Live') + ': ' + (r.ok === true ? 'works' : r.ok === false ? 'blocked' : 'not sure'));
+        const name = { kick: 'Kick', youtube: 'YouTube Live', viewers: 'Viewer counts', emotes: 'Emote pictures' }[k] || k;
+        const it = el('span', 'plat-res ' + (r.ok === true ? 'ok' : r.ok === false ? 'bad' : 'warn'), name + ': ' + (r.ok === true ? 'works' : r.ok === false ? (k === 'kick' || k === 'youtube' ? 'blocked' : 'not working') : 'not sure'));
         it.title = r.detail; row.append(it);
       });
       row.append(el('span', 'muted', 'tested ' + ago(t.checked, Math.max(data.now, t.checked))));
