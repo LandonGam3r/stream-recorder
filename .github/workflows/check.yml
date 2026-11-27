@@ -17,7 +17,7 @@ jobs:
           # Files that only exist on a real installation.
           for f in $(git ls-files); do
             case "$f" in
-              server/config.php|dashboard/config.php|*/secret/*|*.enc|*token_setup.txt|*anthropic_setup.txt|*dashboard_key*|*client_secret*.json|*youtube_setup_*.json|pc-tools/*/accounts/*|pc-tools/*/config.json|pc-tools/summarize/summaries/*|server/channels.json|server/recordings/*)
+              server/config.php|dashboard/config.php|*/secret/*|*.enc|*token_setup.txt|*anthropic_setup.txt|*dashboard_key*|*client_secret*.json|*youtube_setup_*.json|pc-tools/*/accounts/*|pc-tools/*/config.json|pc-tools/summarize/summaries/*|server/channels.json|server/recordings/*|docker/.env|*/.env)
                 echo "::error file=$f::this file must not be in the repository"; bad=1 ;;
             esac
           done
@@ -36,6 +36,11 @@ jobs:
           php-version: '8.0'
       - name: PHP syntax (8.0, the minimum)
         run: for f in server/*.php dashboard/*.php; do php -l "$f"; done
+      - name: Recorder and dashboard have the same version
+        run: |
+          r=$(grep -oP "const RECORDER_VERSION = '\K[0-9.]+" server/record.php)
+          d=$(grep -oP "const DASHBOARD_VERSION = '\K[0-9.]+" dashboard/index.php)
+          echo "record.php $r, dashboard $d"; test -n "$r" && test "$r" = "$d"
       - name: Automated tests (server)
         run: php tests/run.php
       - name: Automated tests (PC summary tool)
@@ -67,3 +72,19 @@ jobs:
         run: python3 -m py_compile pc-tools/youtube-uploader/yt_uploader.py pc-tools/summarize/summarize.py
       - name: Shell syntax
         run: bash -n start-local.sh
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build the Docker image
+        run: docker build -f docker/Dockerfile -t stream-recorder:test .
+      - name: Start it and check the dashboard, the recorder and the tools
+        run: |
+          docker run -d --name sr -e REC_KEY=ci0123456789abcdefgh -e TZ=Europe/Amsterdam -p 8080:8080 stream-recorder:test
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:8080/ -o page.html && grep -q "Dashboard key" page.html && break; sleep 2; done
+          grep -q "Dashboard key" page.html
+          docker logs sr | grep -q "Dashboard key ("
+          docker exec sr php -r '$s = json_decode(file_get_contents("/data/server/recordings/.settings.json"), true); exit(!empty($s["ffmpeg"]) && $s["rec_key"] === "ok" && $s["ext"]["gd"] && $s["ext"]["font"] ? 0 : 1);'
+          docker exec sr sh -c 'test ! -e /opt/stream-recorder/server/config.php && test ! -e /opt/stream-recorder/server/secret'
+          docker stop sr

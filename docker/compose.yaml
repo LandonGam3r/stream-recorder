@@ -1,0 +1,21 @@
+# Stream Recorder™ with Docker Compose. From the repository folder:
+#   cp docker/example.env docker/.env    (and fill in REC_KEY and TZ)
+#   docker compose -f docker/compose.yaml up -d --build
+# Then open http://localhost:8080 - the login key is in the container log: docker compose -f docker/compose.yaml logs
+services:
+  stream-recorder:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: stream-recorder:local
+    container_name: stream-recorder
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - stream-recorder-data:/data
+    ports:
+      # Only reachable from this computer. For other devices, put it behind a reverse proxy with HTTPS.
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  stream-recorder-data:

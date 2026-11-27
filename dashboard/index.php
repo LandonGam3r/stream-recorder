@@ -21,9 +21,43 @@ foreach ([
     'FORCE_HTTPS'  => 'auto', // 'auto' = on, except for localhost / IP addresses / local names
     'TIMEZONE'     => '',     // '' = the recorder's time zone
     'ICON_FILE'    => '',     // your own page icon (png/jpg/gif/ico), '' = built-in
+    'UPDATE_CHECK' => true,   // once a day, ask GitHub whether a newer version is out (nothing about you is sent)
+    'UPDATE_REPO'  => 'LandonGam3r/stream-recorder', // where releases come from (change it if you run a fork)
 ] as $k => $v) {
     if (!defined($k)) define($k, $v);
 }
+const DASHBOARD_VERSION = '2.0.0';
+
+/** Before the first cron run: the cron line to add and what the web server already has. No secrets in it. */
+function first_setup_page(): void
+{
+    $rec = REC_DIR . '/record.php';
+    $log = REC_DIR . '/cron_output.txt';
+    header('Content-Type: text/html; charset=utf-8');
+    $e = function ($s) { return htmlspecialchars((string)$s, ENT_QUOTES); };
+    $ok = function (bool $b) { return $b ? '<b class="ok">✓</b>' : '<b class="bad">✗</b>'; };
+    echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stream Recorder™ - setup</title>'
+        . '<style>body{margin:0;background:#0f1115;color:#e6e8ec;font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}main{max-width:760px;margin:40px auto;padding:0 20px}'
+        . 'h1{font-size:20px}h2{font-size:15px;margin-top:26px}code,pre{background:#171a21;border:1px solid #262a33;border-radius:8px}pre{padding:12px;white-space:pre-wrap;word-break:break-all}code{padding:1px 5px}'
+        . 'li{margin:6px 0}.ok{color:#3ccf91}.bad{color:#ff6b6b}.muted{color:#8b93a1}button{background:#8f7cff;color:#111;border:0;border-radius:8px;padding:6px 12px;font:inherit;font-weight:600;cursor:pointer}</style></head><body><main>'
+        . '<h1>Stream Recorder™ - almost there</h1>'
+        . '<p>The dashboard is installed and found the recorder. The recorder hasn\'t run yet: its first run creates your dashboard key. Add this cron job (cPanel: <b>Cron Jobs</b>, "Once Per Minute"):</p>'
+        . '<pre id="line">* * * * * REC_KEY=<span id="k">…</span> /usr/local/bin/php -q ' . $e($rec) . ' &gt;&gt; ' . $e($log) . ' 2&gt;&amp;1</pre>'
+        . '<p><button id="copy" type="button">Copy</button> <span class="muted" id="cm"></span></p>'
+        . '<ul><li><b>REC_KEY</b> above is a new random passphrase made in your browser (the server never saw it). It encrypts your Twitch, YouTube and Claude keys. <b>Save it somewhere safe</b> and keep the same one: with another one, stored keys can\'t be read.</li>'
+        . '<li><b>/usr/local/bin/php</b>: the PHP 8 command on your host. cPanel hosts usually have this; others: <code>/usr/bin/php</code> or <code>/opt/cpanel/ea-php83/root/usr/bin/php</code>. The dashboard\'s setup check later shows which one the cron job really used.</li>'
+        . '<li>Within a minute after saving the cron job, reload this page: it asks for the dashboard key, which is in <code>' . $e(REC_DIR . '/secret/dashboard_key.txt') . '</code> (open it with the cPanel File Manager).</li></ul>'
+        . '<h2>What this web server has</h2><ul>'
+        . '<li>' . $ok(PHP_VERSION_ID >= 80000) . ' PHP ' . $e(PHP_VERSION) . ' (8.0 or newer needed)</li>'
+        . '<li>' . $ok(extension_loaded('curl')) . ' curl &nbsp; ' . $ok(extension_loaded('openssl')) . ' openssl &nbsp; ' . $ok(extension_loaded('mbstring')) . ' mbstring</li>'
+        . '<li>' . $ok(!recorder_in_webroot()) . ' Recorder folder <code>' . $e(REC_DIR) . '</code>' . (recorder_in_webroot() ? ' is inside the website folder - move it next to public_html, not inside.' : ' is outside the website folder.') . '</li>'
+        . '<li>' . $ok(is_writable(REC_DIR)) . ' The recorder folder is writable</li>'
+        . '</ul><p class="muted">Full guide: docs/install-webserver.md. This page disappears once the key exists.</p>'
+        . '<script nonce="' . $GLOBALS['nonce'] . '">(function(){var a=new Uint8Array(24),c="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789",k="";crypto.getRandomValues(a);for(var i=0;i<a.length;i++)k+=c[a[i]%c.length];'
+        . 'document.getElementById("k").textContent=k;document.getElementById("copy").onclick=function(){navigator.clipboard.writeText(document.getElementById("line").textContent).then(function(){document.getElementById("cm").textContent="Copied. Save the REC_KEY part somewhere safe too."})}})();</script>'
+        . '</main></body></html>';
+}
+
 /** The recorder folder: config, $RECORDER_DIR (start-local.sh), or next to / above this folder. */
 function recorder_dir(): string
 {
@@ -161,8 +195,9 @@ if ($keyHash === '') {
     $keyHash = $plain !== '' ? hash('sha256', $plain) : '';
 }
 if ($keyHash === '') {
+    // Fresh install: no key yet (the first cron run makes it). Show what is needed to get there.
     http_response_code(503);
-    echo 'Dashboard not set up yet: the key is created by the next cron run of the new record.php.';
+    first_setup_page();
     exit;
 }
 // Login cookie = issue time + session generation, signed with a key derived from the dashboard key's
@@ -502,7 +537,75 @@ function collect(): array
         'key_file' => is_file(REC_DIR . '/secret/dashboard_key.txt') && is_file(REC_DIR . '/secret/dashboard_key.hash'),
         'webroot_risk' => recorder_in_webroot(),
         'last_cron_age' => is_file(REC_DIR . '/last_run.txt') ? time() - filemtime(REC_DIR . '/last_run.txt') : null,
+        'setup' => setup_checks(),
+        'version' => ['dashboard' => DASHBOARD_VERSION, 'recorder' => (string)(read_json(REC_DIR . '/recordings/.settings.json')['version'] ?? ''), 'update' => update_info()],
     ];
+}
+
+/**
+ * The setup check (also the first-time setup page): what works, what's missing and how to fix it.
+ * Each: ['id', 'ok' => true|false|null (optional or unknown), 'title', 'detail'].
+ */
+function setup_checks(): array
+{
+    $st = read_json(REC_DIR . '/recordings/.settings.json');      // written by the cron job's PHP every minute
+    $cronAge = is_file(REC_DIR . '/last_run.txt') ? time() - filemtime(REC_DIR . '/last_run.txt') : null;
+    $fresh = $st && time() - (int)($st['updated'] ?? 0) < 600;
+    $c = [];
+    $c[] = ['id' => 'php', 'ok' => PHP_VERSION_ID >= 80000 && extension_loaded('curl') && extension_loaded('openssl'), 'title' => 'Web PHP ' . PHP_VERSION,
+        'detail' => PHP_VERSION_ID < 80000 ? 'PHP 8.0 or newer is needed for the dashboard.' : (!extension_loaded('curl') ? 'The curl extension is missing.' : 'with curl and openssl')];
+    $c[] = ['id' => 'folder', 'ok' => !recorder_in_webroot(), 'title' => 'Recorder folder', 'detail' => REC_DIR
+        . (recorder_in_webroot() ? ' - this is inside the website folder, so it may be reachable from the internet. Move it next to (not inside) public_html.' : ' - outside the website folder, good.')];
+    $c[] = ['id' => 'cron', 'ok' => $cronAge !== null && $cronAge < 180, 'title' => 'Cron job',
+        'detail' => $cronAge === null ? 'The recorder has never run. Add the cron line below (in cPanel: Cron Jobs, "Once per minute").'
+            : ($cronAge < 180 ? 'runs every minute (last run ' . $cronAge . ' s ago).' : 'last run ' . round($cronAge / 60) . ' minutes ago - is the cron line still there?')];
+    if ($fresh) {
+        $c[] = ['id' => 'cronphp', 'ok' => version_compare((string)($st['php'] ?? '0'), '8.0', '>=') && !empty($st['ext']['curl']), 'title' => 'Cron PHP ' . ($st['php'] ?? '?'),
+            'detail' => version_compare((string)($st['php'] ?? '0'), '8.0', '>=') ? (string)($st['php_binary'] ?? '') : 'The cron job uses an old PHP: put the path of PHP 8 in the cron line (cPanel hosts often have /usr/local/bin/php or /opt/cpanel/ea-php83/root/usr/bin/php).'];
+        $c[] = ['id' => 'exec', 'ok' => !empty($st['exec']), 'title' => 'Starting background jobs',
+            'detail' => !empty($st['exec']) ? 'exec() works.' : 'PHP\'s exec() is disabled for the cron job: use one cron line per streamer (see the installation guide).'];
+        $c[] = ['id' => 'reckey', 'ok' => ($st['rec_key'] ?? '') === 'ok' ? true : (($st['rec_key'] ?? '') === 'weak' ? false : null), 'title' => 'REC_KEY in the cron line',
+            'detail' => ($st['rec_key'] ?? '') === 'ok' ? 'set - tokens and API keys can be stored encrypted.'
+                : (($st['rec_key'] ?? '') === 'weak' ? 'too short or with other characters: use 16 or more letters and digits.' : 'not set: needed for the Twitch login, YouTube uploads and the Claude API key. Use the cron line below.')];
+        $c[] = ['id' => 'ffmpeg', 'ok' => !empty($st['ffmpeg']), 'title' => 'ffmpeg',
+            'detail' => !empty($st['ffmpeg']) ? 'found (' . $st['ffmpeg'] . '): MP4s, clips, thumbnails, gap repair.' : 'not found' . (!empty($st['ffmpeg_problem']) ? ' (' . $st['ffmpeg_problem'] . ')' : '') . ': recordings stay .ts files. See "ffmpeg" in the installation guide.'];
+        $c[] = ['id' => 'font', 'ok' => !empty($st['ext']['gd']) && !empty($st['ext']['font']) ? true : null, 'title' => 'Thumbnail text',
+            'detail' => empty($st['ext']['gd']) ? 'PHP\'s GD with FreeType is missing: AI thumbnails come without text.' : (empty($st['ext']['font']) ? 'no font found: AI thumbnails come without text (see THUMBNAIL_FONT in config.example.php).' : 'GD and a font are there.')];
+    }
+    $https = is_https();
+    $local = preg_match('/^(localhost|127\.|\[?::1)/', (string)($_SERVER['HTTP_HOST'] ?? ''));
+    $c[] = ['id' => 'https', 'ok' => $https || $local ? true : false, 'title' => 'HTTPS', 'detail' => $https ? 'the dashboard is opened over HTTPS.' : ($local ? 'opened on this computer only.' : 'opened over plain HTTP: your key and recordings travel unencrypted. Use https://.')];
+    $tok = read_json(REC_DIR . '/secret/token_status.json');
+    $c[] = ['id' => 'twitch', 'ok' => ($tok['status'] ?? '') === 'valid' ? true : null, 'title' => 'Twitch login (optional)', 'detail' => ($tok['status'] ?? '') === 'valid' ? 'works (ad-free where you are subscribed).' : 'not set: recording anonymously, so ad breaks are holes (gap repair fills them from the VOD). See docs/twitch-token.md.'];
+    $yt = glob(REC_DIR . '/secret/youtube_*.enc') ?: [];
+    $c[] = ['id' => 'youtube', 'ok' => $yt ? true : null, 'title' => 'YouTube upload (optional)', 'detail' => $yt ? count($yt) . ' account(s) set up.' : 'not set up. See docs/youtube.md.'];
+    $c[] = ['id' => 'claude', 'ok' => is_file(REC_DIR . '/secret/anthropic.enc') ? true : null, 'title' => 'Claude API key (optional)', 'detail' => is_file(REC_DIR . '/secret/anthropic.enc') ? 'stored: AI summaries, chapters, clips and questions.' : 'not set: summaries can still be made on your PC. Set it in the AI card.'];
+    return ['checks' => $c, 'paths' => ['record' => REC_DIR . '/record.php', 'log' => REC_DIR . '/cron_output.txt', 'php' => (string)($st['php_binary'] ?? ''),
+        'rec_key' => (string)($st['rec_key'] ?? ''), 'docker' => is_file('/.dockerenv')]];
+}
+
+/** The newest release on GitHub, asked at most once a day: ['latest', 'url', 'newer' => bool] or null. */
+function update_info(): ?array
+{
+    if (!UPDATE_CHECK) return null;
+    $f = REC_DIR . '/recordings/.update_check.json';
+    $c = read_json($f);
+    if (time() - (int)($c['checked'] ?? 0) > 86400 && preg_match('#^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$#', UPDATE_REPO)) {
+        $c['checked'] = time(); // also when GitHub doesn't answer: try again tomorrow
+        $ch = curl_init('https://api.github.com/repos/' . UPDATE_REPO . '/releases/latest');
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 5, CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_HTTPHEADER => ['Accept: application/vnd.github+json', 'User-Agent: Stream-Recorder-update-check']]);
+        $j = json_decode((string)curl_exec($ch), true);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        if ($code === 200 && preg_match('/^v?(\d+\.\d+\.\d+)$/', (string)($j['tag_name'] ?? ''), $m)) {
+            $c['latest'] = $m[1];
+            $c['url'] = preg_match('#^https://github\.com/#', (string)($j['html_url'] ?? '')) ? $j['html_url'] : 'https://github.com/' . UPDATE_REPO . '/releases';
+        }
+        @file_put_contents($f, json_encode($c));
+    }
+    if (empty($c['latest'])) return null;
+    return ['latest' => $c['latest'], 'url' => $c['url'] ?? '', 'newer' => version_compare($c['latest'], DASHBOARD_VERSION, '>')];
 }
 
 /** "older than 30 days, newest 10" for the log. */
@@ -1714,6 +1817,10 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   .ex-title { flex: 1; min-width: 160px; }
   .ex-made { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.06); color: var(--muted); }
   .ex-made.done { color: var(--ok); background: rgba(60,207,145,.12); } .ex-made.failed { color: var(--bad); background: rgba(255,107,107,.12); }
+  .setup .srow { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .setup .sicon { font-weight: 700; width: 18px; text-align: center; flex: none; }
+  .setup .sicon.ok { color: var(--ok); } .setup .sicon.bad { color: var(--bad); } .setup .sicon.opt { color: var(--muted); }
+  .setup .cronline { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
   .checkin { flex-basis: 100%; font-size: 13px; color: var(--text); background: rgba(155,135,255,.08); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px; margin-top: 6px; }
   .checkin b { color: #b3a8ff; font-weight: 600; }
   .aistatus { font-size: 13px; }
@@ -1993,7 +2100,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     <span class="chip" id="hToken"></span>
     <span class="chip" id="hCron"></span>
     <span class="updated" id="updated">Loading…</span>
-    <span class="logout"><button class="act" id="logoutBtn" title="Log out in this browser">Log out</button><button class="act" id="logoutAllBtn" title="End every login, on all your devices and browsers">Log out everywhere</button></span>
+    <span class="logout"><button class="act" id="setupBtn" title="What works, what's missing, and the cron line">Setup check</button><button class="act" id="logoutBtn" title="Log out in this browser">Log out</button><button class="act" id="logoutAllBtn" title="End every login, on all your devices and browsers">Log out everywhere</button></span>
   </div>
 </header>
 <main>
@@ -2877,6 +2984,30 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   };
   function renderNotices(data) {
     const box = $('#notices'); box.replaceChildren();
+    // A newer version on GitHub (once a day), and the two halves of this installation at different versions.
+    const v = data.version || {};
+    if (v.update && v.update.newer) {
+      let hidden = ''; try { hidden = localStorage.getItem('stream-dash-update-hidden') || ''; } catch (e) {}
+      if (hidden !== v.update.latest) {
+        const n = el('div', 'notice info');
+        n.append(el('span', null, 'Stream Recorder ' + v.update.latest + ' is available (you have ' + v.dashboard + '). '));
+        const a = el('a', null, 'What\'s new and how to update'); a.href = v.update.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        const x = el('button', 'act', 'Hide'); x.onclick = () => { try { localStorage.setItem('stream-dash-update-hidden', v.update.latest); } catch (e) {} render(lastData); };
+        n.append(a, ' ', x); box.append(n);
+      }
+    }
+    if (v.recorder && v.dashboard && v.recorder !== v.dashboard) {
+      const n = el('div', 'notice bad');
+      n.append(el('span', null, 'The recorder (record.php ' + v.recorder + ') and this dashboard (' + v.dashboard + ') are different versions: upload all files of the new version, both folders.'));
+      box.append(n);
+    }
+    const bad = ((data.setup || {}).checks || []).filter(c => c.ok === false);
+    if (bad.length) {
+      const n = el('div', 'notice bad');
+      n.append(el('span', null, 'Setup: ' + bad.map(c => c.title).join(', ') + (bad.length === 1 ? ' needs' : ' need') + ' attention. '));
+      const b = el('button', 'act', 'Open the setup check'); b.onclick = () => openSetup(lastData); n.append(b);
+      box.append(n);
+    }
     if (data.webroot_risk) {
       const n = el('div', 'notice bad');
       n.append(el('span', null, 'The recorder folder is inside your website\'s folder. Recordings and the secret/ folder could be downloadable on servers that ignore .htaccess (e.g. nginx). Move it next to public_html (docs/install-webserver.md).'));
@@ -2891,6 +3022,39 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
       box.append(n);
     }
   }
+
+  /** The setup check: every item with how to fix it, and a cron line with a new REC_KEY made in this browser. */
+  function openSetup(data) {
+    const s = data.setup || { checks: [], paths: {} };
+    const ov = el('div', 'reader'); ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true');
+    const box = el('div', 'rbox'), head = el('div', 'rhead');
+    head.append(el('span', 'rtitle', 'Setup check · dashboard ' + ((data.version || {}).dashboard || '') + ', recorder ' + ((data.version || {}).recorder || '?')));
+    const x = el('button', 'act', '✕ Close'); head.append(x);
+    const body = el('div', 'rbody setup');
+    s.checks.forEach(c => {
+      const row = el('div', 'srow');
+      row.append(el('span', 'sicon ' + (c.ok === true ? 'ok' : c.ok === false ? 'bad' : 'opt'), c.ok === true ? '✓' : c.ok === false ? '✗' : '–'));
+      const t = el('div'); t.append(el('b', null, c.title), el('div', 'rec-sub', c.detail)); row.append(t);
+      body.append(row);
+    });
+    body.append(el('h3', null, 'The cron line'));
+    body.append(el('p', 'rec-sub', 'One line, every minute (cPanel: Cron Jobs). Only needed when you set it up or move the recorder. ' + (s.paths.rec_key === 'ok'
+      ? 'Your REC_KEY is set: keep using the same one, or stored tokens can\'t be read.' : 'The REC_KEY below is new and random, made in this browser: save it somewhere safe.')));
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789', a = new Uint8Array(24); crypto.getRandomValues(a);
+    const key = [...a].map(n => chars[n % chars.length]).join('');
+    const keep = s.paths.rec_key === 'ok';   // already set: show where it goes, don't suggest a new one
+    if (s.paths.docker) body.append(el('p', 'rec-sub', 'This runs in Docker: there is no cron line - the container runs the recorder every minute. REC_KEY goes in docker/.env (see docker/README.md).'));
+    const line = '* * * * * REC_KEY=' + (keep ? '<your current REC_KEY>' : key) + ' ' + (s.paths.php || '/usr/local/bin/php') + ' -q ' + s.paths.record + ' >> ' + s.paths.log + ' 2>&1';
+    const pre = el('pre', 'cronline', line); body.append(pre);
+    const cp = el('button', 'act', 'Copy'); cp.onclick = () => navigator.clipboard.writeText(line).then(() => { cp.textContent = 'Copied'; });
+    body.append(cp);
+    box.append(head, body); ov.append(box);
+    const close = () => { ov.remove(); document.body.style.overflow = ''; document.removeEventListener('keydown', esc); };
+    const esc = e => { if (e.key === 'Escape') close(); };
+    x.onclick = close; ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    document.addEventListener('keydown', esc); document.body.style.overflow = 'hidden'; document.body.append(ov); x.focus();
+  }
+  $('#setupBtn').onclick = () => { if (lastData) openSetup(lastData); };
 
   function renderScanAsks(data) {
     const box = $('#scanAsks'); box.replaceChildren();

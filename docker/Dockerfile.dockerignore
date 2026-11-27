@@ -1,0 +1,8 @@
+# Only the program goes into the image - never your settings, keys or recordings.
+*
+!server/*.php
+!dashboard/*.php
+!dashboard/*.html
+!docker/entrypoint.sh
+server/config.php
+dashboard/config.php

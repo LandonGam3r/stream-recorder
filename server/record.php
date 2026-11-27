@@ -27,6 +27,7 @@ if (PHP_SAPI !== 'cli' || isset($_SERVER['REQUEST_METHOD'])) {
 // ============================ SETTINGS ============================
 // Your settings go in config.php next to this file (copy config.example.php - every setting is
 // explained there). Anything config.php doesn't set uses the default below.
+const RECORDER_VERSION = '2.0.0'; // the dashboard compares this with its own version and with the latest release
 const RECORDINGS_DIR = __DIR__ . '/recordings';
 const SECRET_DIR     = __DIR__ . '/secret';
 if (is_file(__DIR__ . '/config.php')) require __DIR__ . '/config.php';
@@ -2464,8 +2465,16 @@ function run_manager(): void
         file_put_contents($GLOBALS['logFile'], substr($keep, (int)strpos($keep, "\n") + 1));
     }
     // For the dashboard: settings it shows or needs (it can't read config.php itself).
+    // (and the setup check: what the cron job's PHP has - the dashboard's web PHP can differ)
+    $rk = (string)getenv('REC_KEY');
     @file_put_contents(RECORDINGS_DIR . '/.settings.json', json_encode(['timezone' => date_default_timezone_get(),
-        'quality' => QUALITY, 'convert_speed' => CONVERT_SPEED, 'php' => PHP_VERSION, 'updated' => time()]));
+        'quality' => QUALITY, 'convert_speed' => CONVERT_SPEED, 'php' => PHP_VERSION, 'updated' => time(),
+        'version' => RECORDER_VERSION, 'php_binary' => PHP_BINARY,
+        'rec_key' => $rk === '' ? 'missing' : (preg_match('/^[A-Za-z0-9]{16,}$/', $rk) ? 'ok' : 'weak'),
+        'exec' => exec_available(), 'ffmpeg' => exec_available() ? (find_ffmpeg() ?: null) : null, 'ffmpeg_problem' => $GLOBALS['ffmpegProblem'] ?? null,
+        'ext' => ['curl' => extension_loaded('curl'), 'openssl' => extension_loaded('openssl'), 'mbstring' => extension_loaded('mbstring'),
+            'gd' => function_exists('imagettftext'), 'font' => function_exists('ai_font') && ai_font() !== null],
+        'gap_repair' => GAP_REPAIR]));
     if (!exec_available()) {
         $st = load_state();
         if (empty($st['exec_alerted'])) {
