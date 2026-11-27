@@ -2,6 +2,14 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.8.4] - 2026-11-27
+
+### Fixed
+- **Summary tool: "Speech recognition failed: Library cublas64_12.dll is not found".**
+  - **Cause:** the graphics-card check only loaded the model and never made it work, so missing NVIDIA libraries showed up only during the real work.
+  - **Fix:** the check now has the card recognise a short piece of sound. If the card isn't usable, or stops working halfway, the tool continues on the processor from where it was, and explains how to install the libraries (`pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"`).
+  - **Libraries found automatically:** libraries installed that way are found by the tool without a separate CUDA install.
+
 ## [1.8.3] - 2026-11-27
 
 ### Fixed
@@ -274,6 +282,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.8.4]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.3...v1.8.4
 [1.8.3]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.0...v1.8.1

@@ -163,13 +163,33 @@ def sound_pieces(media: Path, start_at: float):
             yield (t0 or 0.0), np.concatenate(buf)
 
 
-def load_whisper(size: str):
-    """The model on the graphics card when it can, in a number format the card supports; else the processor."""
+def cuda_dlls() -> None:
+    """NVIDIA's libraries installed with pip (nvidia-cublas-cu12, nvidia-cudnn-cu12) aren't on Windows' search
+    path by themselves: add their folders, so the graphics card can be used without a separate CUDA install."""
+    if os.name != "nt" or not hasattr(os, "add_dll_directory"):
+        return
+    import site
+    for base in site.getsitepackages() + [site.getusersitepackages()]:
+        for d in Path(base).glob("nvidia/*/bin"):
+            try:
+                os.add_dll_directory(str(d))
+                os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
+            except OSError:
+                pass
+
+
+GPU_HINT = ("  To use your NVIDIA graphics card (much faster), install its libraries once:\n"
+            "    py -m pip install nvidia-cublas-cu12 \"nvidia-cudnn-cu12==9.*\"")
+
+
+def load_whisper(size: str, cpu_only: bool = False):
+    """The model on the graphics card when it really works there, in a number format the card supports; else the processor."""
     fw = need("faster_whisper", "faster-whisper")
+    cuda_dlls()
     tries = [("cpu", "int8")]
     try:
         import ctranslate2  # comes with faster-whisper
-        if ctranslate2.get_cuda_device_count() > 0:
+        if ctranslate2.get_cuda_device_count() > 0 and not cpu_only:
             tries = [("cuda", "float16"), ("cuda", "int8_float32"), ("cuda", "float32")] + tries
     except Exception:
         pass
@@ -179,17 +199,24 @@ def load_whisper(size: str):
         try:
             model = fw.WhisperModel(size, device=device, compute_type=compute)
             if device == "cuda":
+                # A real bit of work: the results come lazily, so they must be read for the card to run at all.
+                # This is where missing NVIDIA libraries (cublas, cudnn) show up.
                 import numpy as np
-                model.transcribe(np.zeros(16000, dtype="float32"), language="en")  # fails here when CUDA libraries are missing
+                segs, _ = model.transcribe(np.random.uniform(-0.1, 0.1, 32000).astype("float32"), language="en", beam_size=1)
+                list(segs)
             say(f"Speech recognition on the {'graphics card' if device == 'cuda' else 'processor'} ({compute}).")
             return model, device
         except Exception as e:
             last = e
+            if device == "cuda" and any(w in str(e).lower() for w in ("cublas", "cudnn", "cuda", "dll", ".so")):
+                say(f"The graphics card can't be used ({str(e)[:120]}) - using the processor instead (slower).\n" + GPU_HINT)
+                tries = [t for t in tries if t[0] == "cpu"]
+                return load_whisper(size, cpu_only=True)
             continue
     raise UserError(f"The speech model could not be loaded: {last}")
 
 
-def transcribe(media: Path, language: str | None, size: str, partial: Path) -> tuple:
+def transcribe(media: Path, language: str | None, size: str, partial: Path, cpu_only: bool = False) -> tuple:
     done, lang, start_at = [], language or "", 0.0
     try:  # continue an interrupted run
         p = json.loads(partial.read_text(encoding="utf-8"))
@@ -198,7 +225,7 @@ def transcribe(media: Path, language: str | None, size: str, partial: Path) -> t
             say(f"Continuing the speech recognition from {clock(start_at)}.")
     except (OSError, ValueError, KeyError):
         pass
-    model, device = load_whisper(size)
+    model, device = load_whisper(size, cpu_only)
     total = media_duration(media) or 1.0
     t_start = time.time()
     try:
@@ -221,6 +248,9 @@ def transcribe(media: Path, language: str | None, size: str, partial: Path) -> t
     except UserError:
         raise
     except Exception as e:
+        if device == "cuda":
+            say(f"\nThe graphics card stopped working ({str(e)[:120]}) - continuing on the processor.\n" + GPU_HINT)
+            return transcribe(media, lang or language, size, partial, cpu_only=True)
         raise UserError(f"Speech recognition failed: {e}")
     say()
     try:
