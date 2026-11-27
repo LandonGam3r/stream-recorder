@@ -2,6 +2,14 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.8.5] - 2026-11-27
+
+### Fixed
+- **Summary tool: the graphics card was still not used after installing NVIDIA's libraries.**
+  - **Loading:** the tool now loads the libraries straight from where pip put them, by their full path, instead of relying on how Windows searches for them. It also looks in every place this Python installs packages.
+  - **Same Python:** `Summarize.bat` offers to install the libraries itself when it sees an NVIDIA card, with the same Python the tool runs on. Libraries installed for another Python on the same PC were never seen.
+  - **Why not:** when the card can't be used, the tool shows the full reason, which Python it runs on and which NVIDIA libraries it found. `Summarize.bat --gpu-check` tests the card on its own in under a minute.
+
 ## [1.8.4] - 2026-11-27
 
 ### Fixed
@@ -282,6 +290,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.8.5]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.4...v1.8.5
 [1.8.4]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.3...v1.8.4
 [1.8.3]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.1...v1.8.2
