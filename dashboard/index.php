@@ -49,7 +49,7 @@ header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 // Only the app's own scripts run: each page load gets a random nonce that its <script> tags carry.
 $nonce = rtrim(strtr(base64_encode(random_bytes(18)), '+/', '-_'), '=');
-header("Content-Security-Policy: default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; img-src data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+header("Content-Security-Policy: default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; img-src data: 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
 header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), midi=(), display-capture=(), screen-wake-lock=(self)');
 header('Cross-Origin-Opener-Policy: same-origin');
 header('Cross-Origin-Resource-Policy: same-origin');
@@ -251,7 +251,7 @@ function login_page(string $error = '', int $code = 200): void
 }
 
 if (!$authed) {
-    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi', 'lib', 'logout', 'keyfile', 'aisummary', 'footage', 'platformtest', 'search', 'bookmarks']));
+    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi', 'lib', 'logout', 'keyfile', 'aisummary', 'footage', 'platformtest', 'search', 'bookmarks', 'aiextra']));
     if (isset($_GET['api']) || isset($_GET['io'])) { // the open dashboard noticed it's logged out: reload shows the login form
         http_response_code(401);
         header('Content-Type: application/json');
@@ -308,6 +308,7 @@ function collect(): array
 {
     $rec = REC_DIR . '/recordings';
     if (is_file(REC_DIR . '/summary.php')) require_once REC_DIR . '/summary.php';
+    if (is_file(REC_DIR . '/summary.php') && is_file(REC_DIR . '/ai.php')) require_once REC_DIR . '/ai.php';
     $aiSpent = 0.0;
     $convertQ = read_json("$rec/.convert_queue.json");
     $uploadQ  = read_json("$rec/.upload_queue.json");
@@ -390,6 +391,7 @@ function collect(): array
                 // Footage deleted, text kept (chat, transcript, summary): still listed and searchable.
                 'text_only' => !empty($meta['footage_deleted']) ? ['when' => $meta['footage_deleted'], 'why' => $meta['footage_deleted_why'] ?? '', 'freed' => $meta['footage_bytes'] ?? 0] : null,
                 'keep_footage' => !empty($meta['keep_footage']),
+                'extras' => ai_extras_info($d),
             ];
         }
         $channels[] = [
@@ -427,6 +429,7 @@ function collect(): array
             'storage' => $list[$name]['storage'] ?? null,
             'not_found' => !empty($st['not_found']),
             'wrapping_up' => !empty($st['stream_id']) && empty($list[$name]['enabled']),
+            'checkin' => $recording && !empty($st['dir']) ? (function ($f) { $l = read_json($f); return $l ? end($l) : null; })("$chanDir/{$st['dir']}/checkins.json") : null,
         ];
     }
     // Switched-on streamers first (live ones on top), then the rest; alphabetical within.
@@ -538,10 +541,12 @@ function file_type(string $name): ?string
     $fixed = ['video.mp4' => 'video/mp4', 'chat.txt' => 'text/plain; charset=utf-8', 'meta.json' => 'application/json',
               'transcript.json' => 'application/json', 'transcript.txt' => 'text/plain; charset=utf-8',
               'ai_summary.md' => 'text/plain; charset=utf-8', 'emotes.json' => 'application/json',
-              'viewers.txt' => 'text/plain; charset=utf-8', 'bookmarks.json' => 'application/json'];
+              'viewers.txt' => 'text/plain; charset=utf-8', 'bookmarks.json' => 'application/json', 'thumbnail.jpg' => 'image/jpeg',
+              'checkins.json' => 'application/json'];
     if (isset($fixed[$name])) return $fixed[$name];
     if (preg_match('/^subtitles(\.[a-z]{2,3}(-[A-Za-z]{2,4})?)?\.vtt$/', $name)) return 'text/vtt; charset=utf-8';
     if (preg_match('/^chat_translation\.[a-z]{2,3}(-[A-Za-z]{2,4})?\.json$/', $name)) return 'application/json';
+    if (preg_match('/^clips\/[a-f0-9]{8}\.mp4$/', $name)) return 'video/mp4';
     if (preg_match('/^audio\/part\d{3}\.(ogg|m4a)$/', $name, $m)) return $m[1] === 'ogg' ? 'audio/ogg' : 'audio/mp4';
     return null;
 }
@@ -567,8 +572,30 @@ function ai_status(float $spent): array
     if (!function_exists('summary_settings')) return ['available' => false];
     $models = [];
     foreach (SUMMARY_MODELS as $id => $m) $models[] = ['id' => $id, 'name' => $m['name']];
+    $digests = [];
+    foreach (array_reverse(glob(REC_DIR . '/recordings/.digests/*.md') ?: []) as $f) $digests[] = ['week' => basename($f, '.md'), 'made' => filemtime($f)];
     return ['available' => true, 'settings' => summary_settings(REC_DIR), 'key' => summary_key_status(REC_DIR),
-        'models' => $models, 'spent' => round($spent, 4)];
+        'models' => $models, 'spent' => round($spent, 4), 'extras' => function_exists('ai_extras_prompt'),
+        'digests' => array_slice($digests, 0, 12), 'digest_pending' => is_file(REC_DIR . '/recordings/.digests/.again'),
+        'last_week' => date('o-\WW', strtotime('-7 days'))];
+}
+
+/** Chapters, clips, thumbnail and questions of a recording for the dashboard, or null. */
+function ai_extras_info(string $d): ?array
+{
+    $x = is_file("$d/ai_extras.json") ? read_json("$d/ai_extras.json") : [];
+    $clips = is_file("$d/clips.json") ? read_json("$d/clips.json") : [];
+    $ask = is_file("$d/ai_ask.json") ? (read_json("$d/ai_ask.json")['items'] ?? []) : [];
+    if (!$x && !$clips && !$ask) return null;
+    $made = [];
+    foreach ($clips as $c) {
+        $made[] = ['id' => (string)($c['id'] ?? ''), 'i' => (int)($c['i'] ?? -1), 'kind' => (string)($c['kind'] ?? ''), 'state' => (string)($c['state'] ?? ''),
+            'title' => (string)($c['title'] ?? ''), 'error' => $c['error'] ?? null, 'youtube' => $c['youtube'] ?? null, 'upload' => (string)($c['upload'] ?? ''),
+            'file' => is_file("$d/clips/" . ($c['id'] ?? 'x') . '.mp4')];
+    }
+    return ['chapters' => $x['chapters'] ?? [], 'clips' => $x['clips'] ?? [], 'made' => $made,
+        'thumbnail' => is_file("$d/thumbnail.jpg") ? (int)filemtime("$d/thumbnail.jpg") : null, 'thumbnail_note' => $x['thumbnail_note'] ?? null,
+        'thumbnail_text' => $x['thumbnail']['text'] ?? null, 'questions' => count($ask)];
 }
 
 /** Subtitle and chat-translation files of a recording: [['name' => ..., 'lang' => ..., 'kind' => 'subs'|'chat'], ...] */
@@ -674,7 +701,7 @@ if (isset($_GET['file'])) {
         header('Content-Disposition: attachment; filename="' . $fn . '"');
     }
     // Video may stay in the browser's cache briefly for smooth seeking; text (chat, subtitles) never.
-    header($name === 'video.mp4' ? 'Cache-Control: private, max-age=600' : 'Cache-Control: no-store');
+    header($name === 'video.mp4' || strpos($name, 'clips/') === 0 ? 'Cache-Control: private, max-age=600' : 'Cache-Control: no-store');
     if ($partial) {
         http_response_code(206);
         header("Content-Range: bytes $start-$end/$size");
@@ -766,6 +793,10 @@ if (isset($_GET['text'])) {
         'play' => is_file("$d/video.mp4") ? $self . '?ch=' . rawurlencode($_GET['ch']) . '&play=' . rawurlencode($_GET['text']) : null,
         'dashboard' => $self,
         'me' => (string)(read_json(REC_DIR . '/secret/token_status.json')['login'] ?? ''),
+        'checkins' => $f('checkins.json'),
+        // Questions to Claude about this recording (needs the API key; answered by the next cron run).
+        'ask' => is_file(REC_DIR . '/ai.php') ? ['api' => $self . '?aiextra=1', 'token' => $csrf, 'key' => is_file(REC_DIR . '/secret/anthropic.enc'),
+            'items' => read_json("$d/ai_ask.json")['items'] ?? []] : null,
     ];
     header(player_csp($GLOBALS['nonce']));
     header('Content-Type: text/html; charset=utf-8');
@@ -1185,7 +1216,7 @@ if (isset($_GET['aisummary'])) {
     $sysLog = function (string $m) { @file_put_contents(REC_DIR . '/recordings/.system.log', '[' . date('Y-m-d H:i:s') . "] Dashboard: $m\n", FILE_APPEND | LOCK_EX); };
     if ($op === 'settings') {
         $cur = summary_settings(REC_DIR);
-        foreach (['auto', 'pictures'] as $k) if (array_key_exists($k, $in)) $cur[$k] = (bool)$in[$k];
+        foreach (['auto', 'pictures', 'chapters', 'thumbnail', 'checkins', 'digest'] as $k) if (array_key_exists($k, $in)) $cur[$k] = (bool)$in[$k];
         if (isset($in['model'])) {
             if (!isset(SUMMARY_MODELS[(string)$in['model']])) action_fail(400, 'Unknown model.');
             $cur['model'] = (string)$in['model'];
@@ -1243,6 +1274,85 @@ if (isset($_GET['aisummary'])) {
         @unlink("$d/ai_summary.md");
         @unlink("$d/ai_summary.json");
         echo json_encode(['ok' => true]);
+        exit;
+    }
+    action_fail(400, 'Unknown action.');
+}
+
+// ---------------------------------------------------------------- more from Claude: clips, questions, digest
+if (isset($_GET['aiextra'])) {
+    $in = check_action_request();
+    if (!is_file(REC_DIR . '/summary.php') || !is_file(REC_DIR . '/ai.php')) action_fail(409, 'ai.php or summary.php is missing in the recorder folder: upload them next to record.php.');
+    require_once REC_DIR . '/summary.php';
+    require_once REC_DIR . '/ai.php';
+    $op = (string)($in['op'] ?? '');
+    $rec = REC_DIR . '/recordings';
+    if ($op === 'digest_read') {
+        $w = (string)($in['week'] ?? '');
+        if (!preg_match('/^\d{4}-W\d\d$/', $w) || !is_file("$rec/.digests/$w.md")) action_fail(404, 'No digest for that week.');
+        echo json_encode(['ok' => true, 'text' => (string)file_get_contents("$rec/.digests/$w.md")], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($op === 'digest_now') {
+        if (!is_file(REC_DIR . '/secret/anthropic.enc')) action_fail(409, 'Needs an API key (AI summary card).');
+        $w = (string)($in['week'] ?? date('o-\WW', strtotime('-7 days')));
+        if (!preg_match('/^\d{4}-W\d\d$/', $w)) action_fail(400, 'Bad week.');
+        @mkdir("$rec/.digests", 0755, true);
+        @unlink("$rec/.digests/$w.none");
+        file_put_contents("$rec/.digests/.again", $w);
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    $d = recording_dir($in['channel'] ?? null, $in['folder'] ?? null);
+    if (!$d) action_fail(404, 'That recording no longer exists.');
+    $chanLog = function (string $m) use ($d) { @file_put_contents(dirname($d) . '/recorder.log', '[' . date('Y-m-d H:i:s') . "] $m\n", FILE_APPEND | LOCK_EX); };
+    if ($op === 'clip') {
+        $kind = ($in['kind'] ?? '') === 'short' ? 'short' : 'clip';
+        $acct = (string)($in['upload'] ?? '');
+        if ($acct !== '' && !is_file(REC_DIR . "/secret/youtube_$acct.enc")) action_fail(400, "No YouTube account named '$acct' is set up.");
+        $err = clip_request($d, (int)($in['index'] ?? -1), $kind, $acct);
+        if ($err !== null) action_fail(409, $err);
+        $chanLog(($kind === 'short' ? 'Short' : 'Clip') . ' requested via the dashboard: ' . basename($d) . ($acct !== '' ? " (then to YouTube: $acct)" : '') . ' - cut by the next cron runs when nothing is recording');
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'clip_delete') {
+        $id = (string)($in['id'] ?? '');
+        if (!preg_match('/^[a-f0-9]{8}$/', $id)) action_fail(400, 'Bad clip.');
+        $err = ai_update("$d/clips.json", function (array &$l) use ($id) {
+            foreach ($l as $i => $c) if (($c['id'] ?? '') === $id) { if (($c['state'] ?? '') === 'cutting') return 'It is being cut right now - try again in a minute.'; unset($l[$i]); $l = array_values($l); return null; }
+            return 'That clip no longer exists.';
+        });
+        if ($err !== null) action_fail(409, $err);
+        foreach (['mp4', 'log', 'exit'] as $x) @unlink("$d/clips/$id.$x");
+        dash_queue_update('upload', function (array &$q) use ($d, $id) { unset($q["$d/clips/$id.mp4"], $q[REC_DIR . '/recordings/' . basename(dirname($d)) . '/' . basename($d) . "/clips/$id.mp4"]); });
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op === 'ask') {
+        if (!is_file(REC_DIR . '/secret/anthropic.enc')) action_fail(409, 'Asking needs an API key (AI summary card on the dashboard).');
+        $q = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($in['q'] ?? '')) ?? '');
+        if (mb_strlen($q) < 3 || mb_strlen($q) > 500) action_fail(400, 'Ask in 3 to 500 characters.');
+        $err = ai_update("$d/ai_ask.json", function (array &$x) use ($q) {
+            $x['items'] = $x['items'] ?? [];
+            foreach ($x['items'] as $i) if (($i['state'] ?? '') === 'queued') return 'Wait for the answer to your last question first.';
+            if (count($x['items']) >= 200) return 'At most 200 questions per recording - delete some first.';
+            $x['items'][] = ['id' => bin2hex(random_bytes(5)), 'q' => $q, 'state' => 'queued', 'asked' => time()];
+            return null;
+        });
+        if ($err !== null) action_fail(409, $err);
+        ai_update("$rec/.ai_pending.json", function (array &$p) use ($d) { if (!in_array($d, $p, true)) $p[] = $d; });
+        echo json_encode(['ok' => true, 'items' => read_json("$d/ai_ask.json")['items'] ?? []], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($op === 'ask_list') {
+        echo json_encode(['ok' => true, 'items' => read_json("$d/ai_ask.json")['items'] ?? []], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($op === 'ask_delete') {
+        $id = (string)($in['id'] ?? '');
+        ai_update("$d/ai_ask.json", function (array &$x) use ($id) { $x['items'] = array_values(array_filter($x['items'] ?? [], function ($i) use ($id) { return ($i['id'] ?? '') !== $id || ($i['state'] ?? '') === 'queued'; })); });
+        echo json_encode(['ok' => true, 'items' => read_json("$d/ai_ask.json")['items'] ?? []], JSON_UNESCAPED_UNICODE);
         exit;
     }
     action_fail(400, 'Unknown action.');
@@ -1588,6 +1698,23 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   .airow { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
   .airow select, .airow input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px; max-width: 100%; }
   .airow input[type=password] { width: 340px; }
+  .airow .muted, .digests .muted { color: var(--muted); font-size: 12px; }
+  .extras { display: flex; gap: 16px; flex-wrap: wrap; padding: 10px 4px 4px; border-top: 1px solid var(--line); margin-top: 8px; }
+  .ex-thumb img { width: 256px; height: 144px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
+  .ex-thumb .rec-sub { max-width: 256px; }
+  .ex-side { flex: 1; min-width: 280px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .ex-side details ul { margin: 4px 0; padding-left: 20px; color: var(--muted); }
+  .ex-h { font-weight: 600; margin-top: 6px; }
+  .ex-clip { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 3px 0; }
+  .ex-clip .act { padding: 2px 8px; font-size: 12px; }
+  .ex-clip select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 12px; padding: 2px 4px; }
+  .ex-t { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; min-width: 52px; text-decoration: none; }
+  .ex-t[href]:hover { color: var(--accent); text-decoration: underline; }
+  .ex-title { flex: 1; min-width: 160px; }
+  .ex-made { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.06); color: var(--muted); }
+  .ex-made.done { color: var(--ok); background: rgba(60,207,145,.12); } .ex-made.failed { color: var(--bad); background: rgba(255,107,107,.12); }
+  .checkin { flex-basis: 100%; font-size: 13px; color: var(--text); background: rgba(155,135,255,.08); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px; margin-top: 6px; }
+  .checkin b { color: #b3a8ff; font-weight: 600; }
   .aistatus { font-size: 13px; }
   .aistatus.ok { color: var(--ok); } .aistatus.warn { color: var(--warn); } .aistatus.bad { color: var(--bad); }
   .aibody details { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
@@ -2482,6 +2609,66 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     }
     return box;
   }
+  /** Chapters, thumbnail and clips from the summary, with buttons to cut clips and Shorts. */
+  let clipErr = {};
+  function extrasBox(c, r) {
+    const x = r.extras, box = el('div', 'extras');
+    const fileUrl = n => '?ch=' + encodeURIComponent(c.name) + '&file=' + encodeURIComponent(r.folder) + '&name=' + encodeURIComponent(n);
+    const playAt = t => r.playable ? '?ch=' + encodeURIComponent(c.name) + '&play=' + encodeURIComponent(r.folder) + '#t=' + Math.max(0, t - 3) : null;
+    if (x.thumbnail) {
+      const th = el('div', 'ex-thumb');
+      const img = el('img'); img.src = fileUrl('thumbnail.jpg') + '&v=' + x.thumbnail; img.alt = 'Thumbnail'; img.loading = 'lazy';
+      const a = el('a'); a.href = fileUrl('thumbnail.jpg') + '&dl=1'; a.title = 'Download the thumbnail'; a.append(img);
+      th.append(a, el('div', 'rec-sub', 'Thumbnail' + (x.thumbnail_text ? ': "' + x.thumbnail_text + '"' : '') + (r.youtube && r.youtube.thumbnail ? ' · YouTube: ' + r.youtube.thumbnail : '') + (x.thumbnail_note ? ' · ' + x.thumbnail_note : '')));
+      box.append(th);
+    }
+    const side = el('div', 'ex-side');
+    if (x.chapters && x.chapters.length) {
+      const d = el('details'); d.append(el('summary', null, 'YouTube chapters (' + x.chapters.length + ')' + (r.youtube ? '' : ' - added when it is uploaded')));
+      const ul = el('ul'); x.chapters.forEach(([t, title]) => ul.append(el('li', null, hms(t) + ' ' + title))); d.append(ul); side.append(d);
+    }
+    if (x.clips && x.clips.length) {
+      side.append(el('div', 'ex-h', 'Clips Claude picked'));
+      const accts = lastData.youtube_accounts || [];
+      x.clips.forEach(([a, b, title], i) => {
+        const row = el('div', 'ex-clip');
+        const t = el('a', 'ex-t', hms(a)); const u = playAt(a); if (u) { t.href = u; t.target = '_blank'; t.rel = 'noopener'; t.title = 'Watch this moment'; }
+        row.append(t, el('span', 'ex-title', title + ' (' + (b - a) + ' s)'));
+        const made = (x.made || []).filter(m => m.i === i);
+        made.forEach(m => {
+          const tag = el('span', 'ex-made ' + m.state, (m.kind === 'short' ? 'Short' : 'Clip') + ': ' + ({ queued: 'waiting (cut when nothing is recording)', cutting: 'being cut…', done: 'ready', failed: 'failed' }[m.state] || m.state));
+          if (m.error) tag.title = m.error;
+          row.append(tag);
+          if (m.file) { const dl = el('a', 'act', 'Download'); dl.href = fileUrl('clips/' + m.id + '.mp4') + '&dl=1'; row.append(dl); const w = el('a', 'act', 'Watch'); w.href = fileUrl('clips/' + m.id + '.mp4'); w.target = '_blank'; w.rel = 'noopener'; row.append(w); }
+          if (m.youtube && m.youtube.url) { const y = el('a', 'act', 'YouTube'); y.href = m.youtube.url; y.target = '_blank'; y.rel = 'noopener noreferrer'; row.append(y); }
+          else if (m.upload && m.state === 'done') row.append(el('span', 'rec-sub', 'uploading to ' + m.upload + '…'));
+          if (m.state !== 'cutting') { const del = el('button', 'act del', '✕'); del.title = 'Delete this ' + (m.kind === 'short' ? 'Short' : 'clip'); del.onclick = () => clipAction(c, r, { op: 'clip_delete', id: m.id }); row.append(del); }
+        });
+        if (r.playable) {
+          const has = k => made.some(m => m.kind === k && m.state !== 'failed');
+          if (!has('clip')) { const b1 = el('button', 'act', 'Cut clip'); b1.title = 'Cut this moment as it was recorded (fast, no quality loss)'; b1.onclick = () => clipAction(c, r, { op: 'clip', index: i, kind: 'clip' }); row.append(b1); }
+          if (!has('short')) {
+            const b2 = el('button', 'act', 'Make Short'); b2.title = 'Vertical 9:16 from the middle of the picture, for YouTube Shorts';
+            const sel = el('select'); sel.title = 'Upload the Short to YouTube?';
+            [['', 'keep here'], ...accts.map(a => [a.name, 'upload to ' + a.name])].forEach(([v, l]) => { const o = el('option', null, l); o.value = v; sel.append(o); });
+            b2.onclick = () => clipAction(c, r, { op: 'clip', index: i, kind: 'short', upload: sel.value });
+            row.append(b2); if (accts.length) row.append(sel);
+          }
+        }
+        side.append(row);
+      });
+      const err = clipErr[c.name + '/' + r.folder]; if (err) side.append(el('div', 'del-err', err));
+      side.append(el('div', 'rec-sub', 'Clips are cut on the server when nothing is recording. Shorts are re-encoded vertically (a minute or two each); uploads go private, like the streams.'));
+    }
+    box.append(side);
+    return box;
+  }
+  async function clipAction(c, r, body) {
+    const key = c.name + '/' + r.folder; delete clipErr[key];
+    try { await post('?aiextra=1', Object.assign({ channel: c.name, folder: r.folder }, body)); } catch (e) { clipErr[key] = e.message; }
+    await load();
+  }
+
   function summaryRow(c, r) {
     const key = c.name + '/' + r.folder, ai = r.ai;
     const tr = el('tr', 'sumrow'), td = el('td'); td.colSpan = 2; tr.append(td);
@@ -2509,7 +2696,10 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     const pc = el('button', 'act', 'Summarize on this PC'); pc.title = 'Free, with Chrome\'s built-in AI (shorter, no pictures)'; pc.onclick = () => summarize(c, r, true);
     const del = el('button', 'act del', 'Delete summary'); del.onclick = () => { if (confirm('Delete this summary?')) { openSummary = null; aiAction('delete', c.name, r.folder); } };
     const close = el('button', 'act', 'Close'); close.onclick = () => { openSummary = null; render(lastData); };
-    f.append(read, again);
+    const ask = el('a', 'act', 'Ask about it'); ask.href = '?ch=' + encodeURIComponent(c.name) + '&text=' + encodeURIComponent(r.folder) + '#tab=ask';
+    ask.target = '_blank'; ask.rel = 'noopener'; ask.title = 'Ask Claude questions about this stream (answers with times you can click)';
+    f.append(read, ask, again);
+    if (r.extras) td.append(extrasBox(c, r));
     if (k.set || k.pending) f.append(pc);
     f.append(del, close);
     td.append(f);
@@ -2518,6 +2708,20 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   }
 
   /** The summary large, over the page; Esc, the ✕ or a click beside it closes it. */
+  /** A Markdown text in the large reading window (weekly digest). */
+  function openTextReader(title, text) {
+    const ov = el('div', 'reader'); ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true');
+    const box = el('div', 'rbox'), head = el('div', 'rhead');
+    head.append(el('span', 'rtitle', title));
+    const x = el('button', 'act', '✕ Close'); head.append(x);
+    const body = el('div', 'rbody'); body.append(mdRender(text, null));
+    box.append(head, body); ov.append(box);
+    const close = () => { ov.remove(); document.body.style.overflow = ''; document.removeEventListener('keydown', esc); };
+    const esc = e => { if (e.key === 'Escape') close(); };
+    x.onclick = close; ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    document.addEventListener('keydown', esc); document.body.style.overflow = 'hidden'; document.body.append(ov); x.focus();
+  }
+
   function openReader(c, r, text) {
     const ov = el('div', 'reader'); ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true');
     const box = el('div', 'rbox');
@@ -2553,6 +2757,16 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     const [picL, pics] = sw('Include pictures from the video', 'A picture every few minutes, so Claude also sees what was on screen (a few tenths of a cent extra)');
     const model = el('select'); model.title = 'Which Claude model writes the summaries';
     const r1 = el('div', 'airow'); r1.append(autoL, picL, model);
+    const [chapL, chap] = sw('YouTube chapters', 'The YouTube upload waits for the summary (at most 2 hours), so the video gets chapters in its description');
+    const [thL, th] = sw('Thumbnail on YouTube', 'Claude picks the most eye-catching picture and a few words; it is set on the YouTube video (needs a verified YouTube channel)');
+    const [ciL, ci] = sw('Live check-ins', 'While a stream is live: every 30 minutes a few sentences on what is happening, going by the chat (about $0.001-0.01 each), on the streamer\'s card');
+    const [dgL, dg] = sw('Weekly digest', 'Every Monday: the past week\'s streams in one overview, from their summaries (about a cent)');
+    const r2 = el('div', 'airow'); r2.append(el('span', 'muted', 'Also:'), chapL, thL, ciL, dgL);
+    chap.onchange = () => save({ chapters: chap.checked });
+    th.onchange = () => save({ thumbnail: th.checked });
+    ci.onchange = () => save({ checkins: ci.checked });
+    dg.onchange = () => save({ digest: dg.checked });
+    const digests = el('div', 'airow digests');
     const save = async (body) => { try { await post('?aisummary=1', Object.assign({ op: 'settings' }, body)); } catch (e) { status.textContent = e.message; } await load(); };
     auto.onchange = () => save({ auto: auto.checked });
     pics.onchange = () => save({ pictures: pics.checked });
@@ -2589,10 +2803,10 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
      'It\'s a smaller model with a short memory: it summarises the stream in 10-minute pieces and then combines those, without pictures. Good for an overview, less detailed than Claude.',
      'It reads English, German, Spanish, French and Japanese; for other languages it uses the English translation from the PC scan.'].forEach(t => ul.append(el('li', null, t)));
     pc.append(ul);
-    body.append(status, r1, kf, how, pc);
+    body.append(status, r1, r2, digests, kf, how, pc);
     card.append(body);
     $('#aiBox').append(card);
-    aiUI = { card, status, auto, pics, model, ki, kr, kb };
+    aiUI = { card, status, auto, pics, model, ki, kr, kb, chap, th, ci, dg, r2, digests, digestKey: '' };
   }
   function renderAi(data) {
     const ai = data.ai_summary;
@@ -2614,6 +2828,30 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     u.kr.style.display = k.set || k.pending ? '' : 'none';
     u.kb.textContent = k.set ? 'Replace key' : 'Save key';
     u.auto.disabled = !(k.set || k.pending);
+    u.r2.style.display = ai.extras ? '' : 'none';
+    u.chap.checked = !!ai.settings.chapters; u.th.checked = !!ai.settings.thumbnail; u.ci.checked = !!ai.settings.checkins; u.dg.checked = !!ai.settings.digest;
+    [u.chap, u.th, u.ci, u.dg].forEach(x => { x.disabled = !(k.set || k.pending); });
+    const dkey = JSON.stringify([ai.digests, ai.digest_pending, k.set]);
+    if (ai.extras && dkey !== u.digestKey) {
+      u.digestKey = dkey;
+      u.digests.replaceChildren();
+      if (ai.digests.length || k.set) u.digests.append(el('span', 'muted', 'Weekly digests:'));
+      ai.digests.slice(0, 6).forEach(d => {
+        const b = el('button', 'act', d.week.replace('-W', ' week ')); b.title = 'Read the digest of ' + d.week;
+        b.onclick = async () => {
+          try { const j = await post('?aiextra=1', { op: 'digest_read', week: d.week }); openTextReader('Weekly digest · ' + d.week, j.text); }
+          catch (e) { alert(e.message); }
+        };
+        u.digests.append(b);
+      });
+      if (k.set) {
+        const now = el('button', 'act', ai.digest_pending ? 'Writing…' : (ai.digests.some(d => d.week === ai.last_week) ? 'Write last week\'s again' : 'Write last week\'s now'));
+        now.disabled = ai.digest_pending;
+        now.title = 'Claude writes the digest of last week (' + ai.last_week + ') within a minute or two';
+        now.onclick = async () => { try { await post('?aiextra=1', { op: 'digest_now', week: ai.last_week }); } catch (e) { alert(e.message); } await load(); };
+        u.digests.append(now);
+      }
+    }
     u.auto.parentNode.title = u.auto.disabled ? 'Needs an API key (automatic summaries are made by Claude on the server)' : 'After a stream (and after your PC-scan choice), Claude writes the summary';
   }
 
@@ -2866,6 +3104,11 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
         n.append(t, stat('Recorded', dur(c.seconds)), stat('Size', mb(c.bytes)), stat('Chat lines', String(c.chat)),
           stat('Gaps', String(c.gaps)), stat('Ads skipped', String(c.ads)), stat('Cron runs', c.runs + (c.kills ? ' (' + c.kills + ' killed)' : '')));
         if (c.viewer) n.append(stat('Watching as', c.viewer));
+        if (c.checkin && c.checkin.text) {
+          const ck = el('div', 'checkin');
+          ck.append(el('b', null, 'AI check-in ' + ago(c.checkin.at, now) + ': '), document.createTextNode(c.checkin.text));
+          n.append(ck);
+        }
         card.append(n);
       }
 

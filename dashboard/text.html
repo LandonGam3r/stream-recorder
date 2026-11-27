@@ -50,7 +50,16 @@
   .k.bookmark { background: rgba(255,215,94,.18); color: #ffd75e; } .k.raid { background: rgba(255,159,67,.18); color: #ff9f43; }
   .k.gift { background: rgba(255,143,216,.16); color: #ff8fd8; } .k.title { background: rgba(108,182,255,.16); color: #6cb6ff; }
   .k.peak { background: rgba(60,207,145,.16); color: #3ccf91; } .k.busy { background: rgba(201,184,255,.16); color: #c9b8ff; }
-  .k.moment { background: rgba(95,211,198,.16); color: #5fd3c6; }
+  .k.moment { background: rgba(95,211,198,.16); color: #5fd3c6; } .k.checkin { background: rgba(155,135,255,.16); color: #b3a8ff; }
+  .ask { padding: 8px 12px; display: flex; flex-direction: column; gap: 10px; }
+  .askform { display: flex; gap: 8px; } .askform input { flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 8px 10px; font: inherit; }
+  .askform input:focus { outline: none; border-color: var(--accent); }
+  .muted { color: var(--muted); } .small { font-size: 12px; }
+  .askerr { color: #ff8080; font-size: 13px; }
+  .askitem { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+  .askq { display: flex; gap: 6px; align-items: baseline; } .askq b { color: var(--accent); }
+  .askdel { margin-left: auto; background: none; border: 0; color: var(--muted); padding: 0 4px; } .askdel:hover { color: #ff8080; }
+  .askitem .md { padding: 4px 0 0; }
 </style>
 </head>
 <body>
@@ -75,7 +84,7 @@
   const colorFor = n => { let h = 0; for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) >>> 0; return COLORS[h % COLORS.length]; };
   const fmt = sec => { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); };
   const parseLocal = s => { const m = /^(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d):(\d\d)(?:\.(\d{1,3}))?/.exec(s || ''); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6], +(m[7] || '0').padEnd(3, '0')).getTime() : null; };
-  const KIND = { bookmark: 'Bookmark', moment: 'Moment', raid: 'Raid', gift: 'Gift subs', title: 'Title', peak: 'Most viewers', busy: 'Busy chat' };
+  const KIND = { checkin: 'Live check-in', bookmark: 'Bookmark', moment: 'Moment', raid: 'Raid', gift: 'Gift subs', title: 'Title', peak: 'Most viewers', busy: 'Busy chat' };
 
   // ---- header
   $('title').textContent = meta.title || S.folder || 'Recording';
@@ -95,7 +104,7 @@
 
   // ---- data
   const get = async u => { if (!u) return null; const r = await fetch(u, { credentials: 'same-origin' }); return r.ok ? r.text() : null; };
-  let chat = [], speech = [], summary = '', viewers = [], emotes = null, events = [];
+  let chat = [], speech = [], summary = '', viewers = [], emotes = null, events = [], checkins = [];
   const EMOTE_OK = /^https:\/\/(static-cdn\.jtvnw\.net|cdn\.betterttv\.net|cdn\.frankerfacez\.com|cdn\.7tv\.app|files\.kick\.com)\/[^\s"'<>]+$/;
 
   function mapper() {
@@ -144,6 +153,7 @@
       picked.forEach(k => ev.push({ t: k * 60, kind: 'busy', label: per.get(k) + ' chat messages in this minute' }));
     }
     (S.bookmarks || []).forEach(b => ev.push({ t: +b.t || 0, kind: 'bookmark', label: b.note || 'Bookmark' }));
+    checkins.forEach(c => { if (c && c.text) ev.push({ t: +c.t || 0, kind: 'checkin', label: String(c.text) }); });
     return ev.sort((a, b) => a.t - b.t);
   }
 
@@ -175,6 +185,7 @@
     document.querySelectorAll('#tabs button[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
     const list = $('list'); list.replaceChildren();
     const count = $('count');
+    if (tab === 'ask') { count.textContent = ''; renderAsk(list); return; }
     if (tab === 'summary') {
       count.textContent = '';
       if (!summary) { list.append(el('div', 'empty', 'No AI summary for this recording. Make one with Summarize on the dashboard.')); return; }
@@ -246,6 +257,57 @@
     return box;
   }
 
+  // ---- ask Claude about this recording
+  let askItems = (S.ask && S.ask.items) || [], askErr = '', askTimer = null;
+  async function askCall(body) {
+    const r = await fetch(S.ask.api, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': S.ask.token },
+      body: JSON.stringify(Object.assign({ channel: S.channel, folder: S.folder }, body)) });
+    const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+    if (!j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+    return j;
+  }
+  function askPoll() {
+    clearTimeout(askTimer);
+    if (!askItems.some(i => i.state === 'queued')) return;
+    askTimer = setTimeout(async () => { try { askItems = (await askCall({ op: 'ask_list' })).items; } catch (e) {} if (tab === 'ask') render(); askPoll(); }, 4000);
+  }
+  function renderAsk(list) {
+    const box = el('div', 'ask');
+    if (!S.ask.key) box.append(el('div', 'empty', 'Asking needs a Claude API key: set one in the AI summary card on the dashboard.'));
+    const form = el('form', 'askform'); form.autocomplete = 'off';
+    const inp = el('input'); inp.placeholder = 'Ask about this stream, e.g. "When did they talk about the new update?"'; inp.maxLength = 500;
+    const go = el('button', null, 'Ask'); go.type = 'submit';
+    const busy = askItems.some(i => i.state === 'queued');
+    inp.disabled = go.disabled = busy || !S.ask.key;
+    form.append(inp, go);
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const q = inp.value.trim(); if (q.length < 3) return;
+      askErr = '';
+      try { askItems = (await askCall({ op: 'ask', q })).items; } catch (x) { askErr = x.message; }
+      render(); askPoll();
+    };
+    box.append(form);
+    box.append(el('div', 'muted small', 'Claude answers from the summary, what was said and the chat (not the pictures). The answer usually arrives within a minute or two, because the server picks it up at its next cron run. It costs a fraction of a cent with Haiku.'));
+    if (askErr) box.append(el('div', 'askerr', askErr));
+    [...askItems].reverse().forEach(i => {
+      const it = el('div', 'askitem');
+      const q = el('div', 'askq'); q.append(el('b', null, 'You: '), i.q);
+      if (i.state !== 'queued') {
+        const del = el('button', 'askdel', '✕'); del.title = 'Delete this question';
+        del.onclick = async () => { try { askItems = (await askCall({ op: 'ask_delete', id: i.id })).items; } catch (x) { askErr = x.message; } render(); };
+        q.append(del);
+      }
+      it.append(q);
+      if (i.state === 'queued') it.append(el('div', 'muted', 'Claude is answering… (asked ' + new Date(i.asked * 1000).toLocaleTimeString() + ')'));
+      else if (i.state === 'failed') it.append(el('div', 'askerr', 'No answer: ' + (i.error || 'unknown problem')));
+      else { it.append(renderMarkdown(String(i.a || ''))); if (i.cost) it.append(el('div', 'muted small', 'about $' + (+i.cost).toFixed(4))); }
+      box.append(it);
+    });
+    list.append(box);
+    if (!busy && S.ask.key) setTimeout(() => inp.focus(), 0);
+  }
+
   // ---- activity graph
   let bins = null;
   function drawGraph() {
@@ -266,7 +328,7 @@
       viewers.forEach((p, i) => { const x = p[0] / dur * w, y = h - 4 * dpr - p[1] / vmax * (h - 12 * dpr); i ? cx.lineTo(x, y) : cx.moveTo(x, y); });
       cx.stroke();
     }
-    const colors = { moment: '#5fd3c6', bookmark: '#ffd75e', raid: '#ff9f43', gift: '#ff8fd8', title: '#6cb6ff', peak: '#3ccf91', busy: '#c9b8ff' };
+    const colors = { checkin: '#b3a8ff', moment: '#5fd3c6', bookmark: '#ffd75e', raid: '#ff9f43', gift: '#ff8fd8', title: '#6cb6ff', peak: '#3ccf91', busy: '#c9b8ff' };
     events.forEach(e => { cx.fillStyle = colors[e.kind]; cx.beginPath(); cx.arc(e.t / dur * w, 7 * dpr, 4 * dpr, 0, Math.PI * 2); cx.fill(); });
     const lg = $('legend'); lg.replaceChildren();
     const item = (color, text) => { const s = el('span'); const i = el('i'); i.style.background = color; s.append(i, text); lg.append(s); };
@@ -296,7 +358,7 @@
   // ---- tabs and search
   function buildTabs() {
     const tabs = $('tabs');
-    [['summary', 'Summary'], ['speech', 'Spoken words'], ['chat', 'Chat'], ['moments', 'Moments']].forEach(([k, label]) => {
+    [['summary', 'Summary'], ['speech', 'Spoken words'], ['chat', 'Chat'], ['moments', 'Moments']].concat(S.ask ? [['ask', 'Ask Claude']] : []).forEach(([k, label]) => {
       const b = el('button', null, label); b.dataset.tab = k;
       b.onclick = () => { tab = k; windowAt = 0; render(); };
       tabs.append(b);
@@ -311,11 +373,12 @@
   (async function init() {
     buildTabs();
     $('list').append(el('div', 'empty', 'Loading…'));
-    const [chatText, trText, sumText, vText, eText] = await Promise.all([S.chat, S.transcript, S.summary, S.viewers, S.emotes].map(u => get(u).catch(() => null)));
+    const [chatText, trText, sumText, vText, eText, cText] = await Promise.all([S.chat, S.transcript, S.summary, S.viewers, S.emotes, S.checkins].map(u => get(u).catch(() => null)));
+    try { checkins = JSON.parse(cText || '[]'); if (!Array.isArray(checkins)) checkins = []; } catch (e) { checkins = []; }
     if (chatText) chat = parseChat(chatText).sort((a, b) => a.t - b.t);
     if (trText) {
       try {
-        const j = JSON.parse(trText), parts = j.parts || {};
+        const j = JSON.parse(trText), parts = j.parts && Object.keys(j.parts).length ? j.parts : { 0: j.segments || [] };
         Object.keys(parts).sort((a, b) => a - b).forEach(k => (parts[k] || []).forEach(s => { if (Array.isArray(s) && s[2]) speech.push({ t: +s[0], text: String(s[2]), tr: s[3] ? String(s[3]) : '' }); }));
       } catch (e) {}
     }
@@ -335,7 +398,9 @@
     tab = hp.get('tab') || (summary ? 'summary' : speech.length ? 'speech' : 'chat');
     if (hp.get('q')) hl = hp.get('q');
     drawGraph();
+    if (tab === 'ask' && !S.ask) tab = 'summary';
     render(hp.has('t') ? +hp.get('t') : null);
+    askPoll();
   })();
 })();
 </script>

@@ -103,6 +103,13 @@ define('MOMENTS_QUOTE_CHAT', true);
 // CONVERT_SPEED while a stream records (with CONVERT_SPEED 0 it then waits until nothing records).
 define('SCAN_WAIT_HOURS', 24);
 
+// ---------------------------------------------------------------- AI thumbnails
+
+// The thumbnail's text needs a bold TrueType font. Most servers have one (DejaVu, Liberation, FreeSans)
+// and it is found by itself. If the dashboard says "without text", put a .ttf file of your choice
+// next to record.php as thumbnail-font.ttf, or give its full path here.
+// define('THUMBNAIL_FONT', '/home/you/fonts/MyFont-Bold.ttf');
+
 // ---------------------------------------------------------------- logging
 
 // true = log every run, including routine "offline" checks and handovers (useful while setting up).

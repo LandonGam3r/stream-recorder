@@ -37,6 +37,11 @@ function summary_settings(string $base): array
         'auto'     => array_key_exists('auto', $s) ? (bool)$s['auto'] : true,
         'pictures' => array_key_exists('pictures', $s) ? (bool)$s['pictures'] : true,
         'model'    => isset(SUMMARY_MODELS[$model]) ? $model : SUMMARY_DEFAULT_MODEL,
+        // More from the summary (ai.php): YouTube chapters and thumbnail, live check-ins, weekly digest.
+        'chapters'  => array_key_exists('chapters', $s) ? (bool)$s['chapters'] : true,
+        'thumbnail' => array_key_exists('thumbnail', $s) ? (bool)$s['thumbnail'] : true,
+        'checkins'  => array_key_exists('checkins', $s) ? (bool)$s['checkins'] : false,
+        'digest'    => array_key_exists('digest', $s) ? (bool)$s['digest'] : true,
     ];
 }
 
@@ -448,7 +453,7 @@ function summary_build_request(string $dir, array $meta, string $model): array
     $params = [
         'model' => $model,
         'max_tokens' => 16000, // long streams get long timelines; only what's written is paid for
-        'system' => summary_system_prompt(),
+        'system' => summary_system_prompt() . (function_exists('ai_extras_prompt') ? ai_extras_prompt() : ''),
         'messages' => [['role' => 'user', 'content' => $content]],
     ];
     return [$params, $total(), count($frames), $notes];
@@ -519,6 +524,8 @@ function summary_poll(string $dir, array $s): void
     foreach ($msg['content'] ?? [] as $c) if (($c['type'] ?? '') === 'text') $text .= $c['text'];
     $text = trim($text);
     if ($text === '') { summary_fail($dir, 'Claude returned an empty summary.'); return; }
+    $meta = json_decode((string)@file_get_contents("$dir/meta.json"), true) ?: [];
+    if (function_exists('ai_take_extras')) $text = ai_take_extras($dir, $text, (float)($meta['recorded_seconds'] ?? 0)); // chapters, clips, thumbnail
     if (($msg['stop_reason'] ?? '') === 'max_tokens') $text .= "\n\n*(The summary was cut off at its maximum length.)*";
     $in = (int)($msg['usage']['input_tokens'] ?? 0) + (int)($msg['usage']['cache_read_input_tokens'] ?? 0) + (int)($msg['usage']['cache_creation_input_tokens'] ?? 0);
     $out = (int)($msg['usage']['output_tokens'] ?? 0);
@@ -530,7 +537,7 @@ function summary_poll(string $dir, array $s): void
         $x['tokens_in'] = $in; $x['tokens_out'] = $out; $x['cost_usd'] = $cost; unset($x['note'], $x['error'], $x['batch']);
     });
     summary_remove_frames($dir);
-    $meta = json_decode((string)@file_get_contents("$dir/meta.json"), true) ?: [];
+    if (function_exists('ai_after_summary')) ai_after_summary($dir);
     logmsg(sprintf('AI summary ready for %s (%d tokens in, %d out, about $%.4f)', basename($dir), $in, $out, $cost));
     alert('Summary ready: ' . (($meta['title'] ?? '') !== '' ? $meta['title'] : basename($dir)),
         "The AI summary of this stream is ready - open it with \"Summary\" at the recording on the dashboard.\n\nCost: about $" . sprintf('%.4f', $cost) . " ($in tokens in, $out out).", 'info');

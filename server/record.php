@@ -93,6 +93,7 @@ require_once __DIR__ . '/streamdata.php'; // viewer counts, emotes, bookmarks, s
 if (is_file(__DIR__ . '/moments.php')) require_once __DIR__ . '/moments.php';
 if (is_file(__DIR__ . '/scan.php')) require_once __DIR__ . '/scan.php';     // PC scan (subtitles, translation, spoken moments)
 if (is_file(__DIR__ . '/summary.php')) require_once __DIR__ . '/summary.php'; // AI summary of a stream
+if (is_file(__DIR__ . '/summary.php') && is_file(__DIR__ . '/ai.php')) require_once __DIR__ . '/ai.php'; // chapters, thumbnails, clips, ask, check-ins, digest
 const IO_SAMPLE_INTERVAL = 5; // seconds between IO measurements for the dashboard graph
 
 $argvList = $argv ?? ($_SERVER['argv'] ?? []);
@@ -111,6 +112,10 @@ if (!file_exists(RECORDINGS_DIR . '/.htaccess')) {
 }
 if ($arg1 === '--io-sampler') {
     io_sampler_main();
+    exit(0);
+}
+if ($arg1 === '--ai') {
+    if (function_exists('ai_worker')) ai_worker();
     exit(0);
 }
 if ($arg1 === '') {
@@ -2056,13 +2061,22 @@ function process_uploads(): void
         queue_update(function (array &$q) use (&$job) {
             foreach ($q as $dir => $j) {
                 if (($j['not_before'] ?? 0) > time()) continue;
-                if (function_exists('scan_holds_upload') && scan_holds_upload($dir)) continue; // waits for the PC scan
+                $rec = $j['rec'] ?? $dir; // a clip's upload: its recording
+                if (function_exists('scan_holds_upload') && scan_holds_upload($rec)) continue; // waits for the PC scan
+                // Waits for the AI summary (at most 2 hours), so the video gets its chapters and thumbnail.
+                if (empty($j['clip']) && empty($j['session']) && function_exists('ai_holds_upload')) {
+                    $q[$dir]['summary_wait'] = $q[$dir]['summary_wait'] ?? time();
+                    if (ai_holds_upload($rec, (int)$q[$dir]['summary_wait'])) {
+                        if (empty($q[$dir]['summary_wait_noted'])) { $q[$dir]['summary_wait_noted'] = true; @file_put_contents(dirname($rec) . '/recorder.log', '[' . date('Y-m-d H:i:s') . '] YouTube upload waits for the AI summary (chapters and thumbnail), at most 2 hours' . "\n", FILE_APPEND); }
+                        continue;
+                    }
+                }
                 $job = [$dir, $j]; break;
             }
         }, 'upload');
         if (!$job) break;
         [$dir, $j] = $job;
-        $GLOBALS['logFile'] = dirname($dir) . '/recorder.log';
+        $GLOBALS['logFile'] = dirname($j['rec'] ?? $dir) . '/recorder.log';
         $result = upload_step($dir, $j, $deadline); // updates $j
         queue_update(function (array &$q) use ($dir, $j, $result) {
             if ($result === 'done' || $result === 'failed') unset($q[$dir]);
@@ -2117,6 +2131,7 @@ function upload_step(string $dir, array &$j, float $deadline): string
 
     // 1. Start a resumable upload session.
     if (!$j['session']) {
+        if (!empty($j['rec'])) $dir = $j['rec'];
         $meta = json_decode((string)@file_get_contents("$dir/meta.json"), true) ?: [];
         $clean = fn($t) => str_replace(['<', '>'], '', (string)$t);
         $date  = substr((string)($meta['stream_started'] ?? date('Y-m-d')), 0, 10);
@@ -2126,8 +2141,13 @@ function upload_step(string $dir, array &$j, float $deadline): string
             : (strlen($base) > 100 ? substr($base, 0, 97) . '...' : $base);
         if ($mo && $mo['moments']) logmsg(sprintf('YouTube moments for %s: %d found%s', basename($dir), count($mo['moments']),
             $mo['labels'] ? ' - title gets: ' . implode(', ', $mo['labels']) : ''));
-        $desc  = $clean(youtube_description($meta, $mo ? $mo['moments'] : []));
+        $desc  = $clean(youtube_description($meta, $mo ? $mo['moments'] : [], $dir));
         $desc  = function_exists('mb_strcut') ? mb_strcut($desc, 0, 4900) : substr($desc, 0, 4900);
+        if (!empty($j['clip']) && function_exists('clip_upload_details')) { // a clip or Short instead of the whole stream
+            $cd = clip_upload_details($j['rec'], $j['clip']);
+            if (!$cd) return $fail('the clip is no longer listed');
+            [$title, $desc] = [$cd['title'], $cd['description']];
+        }
         [$code, $h, $body] = http_full('POST',
             'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
             ["Authorization: Bearer $tok", 'Content-Type: application/json; charset=UTF-8',
@@ -2227,8 +2247,10 @@ function handle_yt_error(int $code, string $body, array &$j, callable $pause, ca
  * The public YouTube description: only what viewers should see (title, categories, date, length,
  * moments). The internal summary (server folder, cron runs, gaps) stays in the recording folder.
  */
-function youtube_description(array $meta, array $moments): string
+function youtube_description(array $meta, array $moments, string $dir = ''): string
 {
+    // Chapters from the AI summary go first: YouTube reads the first list of times starting at 0:00 as chapters.
+    $chapters = $dir !== '' && function_exists('ai_chapters_text') ? ai_chapters_text($dir, (float)($meta['recorded_seconds'] ?? 0)) : '';
     $clock = function (float $t) { $t = (int)max(0, $t); return sprintf('%d:%02d:%02d', intdiv($t, 3600), intdiv($t, 60) % 60, $t % 60); };
     $who = (string)($meta['channel'] ?? 'The streamer');
     $start = strtotime((string)($meta['stream_started'] ?? '')) ?: time();
@@ -2241,14 +2263,16 @@ function youtube_description(array $meta, array $moments): string
         $g = (string)($c['game'] ?? '');
         if ($g !== '' && (!$games || end($games)[1] !== $g)) $games[] = [(float)($c['video'] ?? 0), $g];
     }
-    if (count($games) > 1) {
+    if (count($games) > 1 && $chapters !== '') {
+        $lines[] = 'Categories: ' . implode(', ', array_unique(array_column($games, 1))); // no second list of times next to the chapters
+    } elseif (count($games) > 1) {
         $lines[] = '';
         $lines[] = 'Categories:';
         foreach ($games as [$t, $g]) $lines[] = $clock($t) . ' ' . $g;
     } elseif (($meta['game'] ?? '') !== '') {
         $lines[] = 'Category: ' . $meta['game'];
     }
-    $out = implode("\n", $lines) . "\n\n";
+    $out = implode("\n", $lines) . "\n\n" . $chapters;
     if ($moments && function_exists('moments_description')) $out .= moments_description($moments);
     return $out . "Recorded with Stream Recorder\u{2122}\n";
 }
@@ -2260,6 +2284,7 @@ function finish_upload(string $dir, array $j, string $body): string
     if (!preg_match('/^[A-Za-z0-9_-]{6,20}$/', $id)) $id = ''; // only YouTube's own video id format
     $privacy = in_array($v['status']['privacyStatus'] ?? '', ['private', 'unlisted', 'public'], true) ? $v['status']['privacyStatus'] : YOUTUBE_PRIVACY;
     $url = $id !== '' ? "https://youtu.be/$id" : '';
+    if (!empty($j['clip']) && function_exists('clip_uploaded')) { clip_uploaded($j['rec'], $j['clip'], $id, $privacy, $j['account']); return 'done'; }
     $meta = json_decode((string)@file_get_contents("$dir/meta.json"), true) ?: [];
     $meta['youtube'] = ['id' => $id, 'url' => $url, 'account' => $j['account'], 'privacy' => $privacy, 'uploaded' => date('Y-m-d H:i:s')];
     file_put_contents("$dir/meta.json", json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
@@ -2267,6 +2292,7 @@ function finish_upload(string $dir, array $j, string $body): string
     logmsg("YouTube upload DONE: " . ($url ?: '(no video id returned)') . " ($privacy)");
     alert('Uploaded to YouTube: ' . (($meta['title'] ?? '') !== '' ? $meta['title'] : basename($dir)),
         "The recording was uploaded to YouTube account '{$j['account']}' as $privacy:\n\n$url\n\nThe recording stays on the server.\n", 'success');
+    if (function_exists('ai_after_upload')) ai_after_upload($dir, $id, (string)$j['account']); // the thumbnail
     return 'done';
 }
 
@@ -2440,6 +2466,7 @@ function run_manager(): void
         if (!empty($c['enabled']) || !empty($st['stream_id'])) spawn_php([$ch]);
     }
     spawn_php(['--io-sampler']);
+    if (function_exists('ai_work_due') && ai_work_due()) spawn_php(['--ai']); // questions, live check-ins, weekly digest
 
     $lk = fopen(RECORDINGS_DIR . '/.manager.lock', 'c');
     if (!$lk || !flock($lk, LOCK_EX | LOCK_NB)) return; // the previous one is still uploading
@@ -2452,6 +2479,7 @@ function run_manager(): void
     if (function_exists('process_speech_lib')) process_speech_lib();
     if (function_exists('process_summaries')) process_summaries();
     process_uploads();
+    if (function_exists('process_clips')) process_clips();
     process_storage_rules();
     flock($lk, LOCK_UN);
 }

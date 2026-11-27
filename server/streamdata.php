@@ -245,6 +245,7 @@ function search_recordings(string $root, string $q, array $opts = []): array
             $tr = json_decode((string)file_get_contents("$d/transcript.json"), true) ?: [];
             $segs = [];
             $parts = (array)($tr['parts'] ?? []);
+            if (!$parts && !empty($tr['segments'])) $parts = [(array)$tr['segments']]; // made by the PC summary tool
             ksort($parts, SORT_NUMERIC);
             foreach ($parts as $p) foreach ((array)$p as $s) if (is_array($s) && isset($s[2])) $segs[] = $s;
             foreach ($segs as $i => $s) {
