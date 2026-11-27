@@ -38,6 +38,7 @@ define('REC_DIR', recorder_dir());
 // Streamer keys for Twitch / Kick / YouTube and the text archive (both next to record.php).
 if (REC_DIR !== '' && is_file(REC_DIR . '/platforms.php')) require_once REC_DIR . '/platforms.php';
 if (REC_DIR !== '' && is_file(REC_DIR . '/archive.php')) require_once REC_DIR . '/archive.php';
+if (REC_DIR !== '' && is_file(REC_DIR . '/streamdata.php')) require_once REC_DIR . '/streamdata.php'; // viewers, emotes, bookmarks, search
 if (!defined('STREAMER_KEY_RE')) define('STREAMER_KEY_RE', '/^[a-z0-9_]{1,40}$/');
 // ==================================================================
 
@@ -52,6 +53,13 @@ header("Content-Security-Policy: default-src 'none'; script-src 'nonce-$nonce'; 
 header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), midi=(), display-capture=(), screen-wake-lock=(self)');
 header('Cross-Origin-Opener-Policy: same-origin');
 header('Cross-Origin-Resource-Policy: same-origin');
+/** The player and text pages may also show chat emotes from Twitch, BetterTTV, FrankerFaceZ and 7TV. */
+function player_csp(string $nonce): string
+{
+    $hosts = defined('EMOTE_HOSTS') ? ' https://' . implode(' https://', EMOTE_HOSTS) : '';
+    return "Content-Security-Policy: default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; connect-src 'self' blob:; media-src 'self' blob:; img-src data: blob:$hosts; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+}
+
 /** Adds this page load's nonce to every <script> tag of a page we serve. */
 function with_nonce(string $html): string
 {
@@ -243,7 +251,7 @@ function login_page(string $error = '', int $code = 200): void
 }
 
 if (!$authed) {
-    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi', 'lib', 'logout', 'keyfile', 'aisummary', 'footage', 'platformtest']));
+    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi', 'lib', 'logout', 'keyfile', 'aisummary', 'footage', 'platformtest', 'search', 'bookmarks']));
     if (isset($_GET['api']) || isset($_GET['io'])) { // the open dashboard noticed it's logged out: reload shows the login form
         http_response_code(401);
         header('Content-Type: application/json');
@@ -529,7 +537,8 @@ function file_type(string $name): ?string
 {
     $fixed = ['video.mp4' => 'video/mp4', 'chat.txt' => 'text/plain; charset=utf-8', 'meta.json' => 'application/json',
               'transcript.json' => 'application/json', 'transcript.txt' => 'text/plain; charset=utf-8',
-              'ai_summary.md' => 'text/plain; charset=utf-8'];
+              'ai_summary.md' => 'text/plain; charset=utf-8', 'emotes.json' => 'application/json',
+              'viewers.txt' => 'text/plain; charset=utf-8', 'bookmarks.json' => 'application/json'];
     if (isset($fixed[$name])) return $fixed[$name];
     if (preg_match('/^subtitles(\.[a-z]{2,3}(-[A-Za-z]{2,4})?)?\.vtt$/', $name)) return 'text/vtt; charset=utf-8';
     if (preg_match('/^chat_translation\.[a-z]{2,3}(-[A-Za-z]{2,4})?\.json$/', $name)) return 'application/json';
@@ -686,6 +695,87 @@ if (isset($_GET['file'])) {
     exit;
 }
 
+// ---------------------------------------------------------------- search the text of all recordings
+if (isset($_GET['search'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!function_exists('search_recordings')) action_fail(409, 'streamdata.php is missing in the recorder folder: upload it next to record.php.');
+    $q = trim((string)($_GET['q'] ?? ''));
+    if (mb_strlen($q) < 2 || mb_strlen($q) > 100) action_fail(400, 'Search for 2 to 100 characters.');
+    $ch = (string)($_GET['in'] ?? '');
+    if ($ch !== '' && !preg_match(STREAMER_KEY_RE, $ch)) action_fail(400, 'Unknown streamer.');
+    $kinds = array_values(array_intersect(explode(',', (string)($_GET['kinds'] ?? 'chat,speech,summary,title,bookmark')), ['chat', 'speech', 'summary', 'title', 'bookmark']));
+    @set_time_limit(40);
+    $r = search_recordings(REC_DIR . '/recordings', $q, ['channel' => $ch, 'kinds' => $kinds ?: ['chat'], 'field' => ($_GET['by'] ?? '') === 'name' ? 'name' : 'text',
+        'limit' => 300, 'seconds' => 20]);
+    echo json_encode(['ok' => true] + $r, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    exit;
+}
+
+// ---------------------------------------------------------------- bookmarks (player)
+if (isset($_GET['bookmarks'])) {
+    $in = check_action_request();
+    if (!function_exists('bookmarks_update')) action_fail(409, 'streamdata.php is missing in the recorder folder: upload it next to record.php.');
+    $d = recording_dir($in['channel'] ?? null, $in['folder'] ?? null);
+    if (!$d) action_fail(404, 'That recording no longer exists.');
+    $op = (string)($in['op'] ?? '');
+    $note = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($in['note'] ?? '')) ?? '');
+    if (mb_strlen($note) > 200) action_fail(400, 'A bookmark note is at most 200 characters.');
+    $err = bookmarks_update($d, function (array &$list) use ($op, $in, $note) {
+        if ($op === 'add') {
+            $t = $in['t'] ?? null;
+            if (!is_numeric($t) || $t < 0 || $t > 360000) return 'Bad time.';
+            if (count($list) >= 500) return 'At most 500 bookmarks per recording.';
+            $list[] = ['id' => bin2hex(random_bytes(6)), 't' => round((float)$t, 1), 'note' => $note, 'added' => time()];
+            return null;
+        }
+        $id = (string)($in['id'] ?? '');
+        foreach ($list as $i => $b) {
+            if (($b['id'] ?? '') !== $id) continue;
+            if ($op === 'delete') { unset($list[$i]); return null; }
+            if ($op === 'edit') { $list[$i]['note'] = $note; return null; }
+            return 'Unknown action.';
+        }
+        return 'That bookmark no longer exists.';
+    });
+    if ($err !== null) action_fail(409, $err);
+    echo json_encode(['ok' => true, 'list' => bookmarks_load($d)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+// ---------------------------------------------------------------- text view: summary, spoken words and chat (also without video)
+if (isset($_GET['text'])) {
+    $d = recording_dir($_GET['ch'] ?? null, $_GET['text']);
+    $page = @file_get_contents(__DIR__ . '/text.html');
+    if (!$d) not_found();
+    if ($page === false) {
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'text.html is missing: upload it next to this index.php.';
+        exit;
+    }
+    $self = strtok($_SERVER['REQUEST_URI'], '?');
+    $base = $self . '?ch=' . rawurlencode($_GET['ch']) . '&file=' . rawurlencode($_GET['text']) . '&name=';
+    $meta = read_json("$d/meta.json");
+    $f = function (string $n) use ($d, $base) { return is_file("$d/$n") ? $base . $n : null; };
+    $src = [
+        'channel' => (string)$_GET['ch'], 'folder' => basename($d),
+        'platform' => function_exists('platform_parse') ? (platform_parse((string)$_GET['ch']) ?? null) : null,
+        'meta' => $meta,
+        'chat' => $f('chat.txt'), 'transcript' => $f('transcript.json'), 'summary' => $f('ai_summary.md'),
+        'viewers' => $f('viewers.txt'), 'emotes' => $f('emotes.json'),
+        'bookmarks' => function_exists('bookmarks_load') ? bookmarks_load($d) : [],
+        'play' => is_file("$d/video.mp4") ? $self . '?ch=' . rawurlencode($_GET['ch']) . '&play=' . rawurlencode($_GET['text']) : null,
+        'dashboard' => $self,
+        'me' => (string)(read_json(REC_DIR . '/secret/token_status.json')['login'] ?? ''),
+    ];
+    header(player_csp($GLOBALS['nonce']));
+    header('Content-Type: text/html; charset=utf-8');
+    $inject = '<script>window.TEXT_SOURCE = ' . json_encode($src, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . ';</script>';
+    $page = preg_replace('#</head>#', '<link rel="icon" type="image/png" href="' . FAVICON . '">' . "\n</head>", $page, 1);
+    $pos = strpos($page, '<script>');
+    echo with_nonce($pos === false ? $page : substr($page, 0, $pos) . $inject . substr($page, $pos));
+    exit;
+}
+
 // ---------------------------------------------------------------- player page
 if (isset($_GET['play'])) {
     $d = recording_dir($_GET['ch'] ?? null, $_GET['play']);
@@ -709,7 +799,13 @@ if (isset($_GET['play'])) {
         'dl_limit_mb' => DOWNLOAD_LIMIT_MB === 'auto' ? round(0.8 * (float)IO_LIMIT_MB, 1) : (float)DOWNLOAD_LIMIT_MB,
         // From the PC scan: subtitles (original + translations) and translated chat.
         'extras' => array_map(function ($o) use ($base) { return $o + ['url' => $base . rawurlencode($o['name'])]; }, scan_outputs($d)),
+        'emotes' => is_file("$d/emotes.json") ? $base . 'emotes.json' : null,
+        'viewers' => is_file("$d/viewers.txt") ? $base . 'viewers.txt' : null,
+        // Bookmarks are kept on the server, next to the recording.
+        'bookmarks' => function_exists('bookmarks_load') ? ['list' => bookmarks_load($d), 'api' => strtok($_SERVER['REQUEST_URI'], '?') . '?bookmarks=1', 'token' => $csrf] : null,
+        'text_url' => strtok($_SERVER['REQUEST_URI'], '?') . '?ch=' . rawurlencode($_GET['ch']) . '&text=' . rawurlencode($_GET['play']),
     ];
+    header(player_csp($GLOBALS['nonce']));
     $inject = '<script>window.PLAYER_SOURCE = ' . json_encode($src, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES) . ';</script>';
     $pos = strpos($player, '<script>');
     header('Content-Type: text/html; charset=utf-8');
@@ -1631,6 +1727,30 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   .plat-res.warn { color: var(--warn, #f5b942); background: rgba(245,185,66,.12); }
   .plat-detail { max-width: 760px; margin-top: 4px; }
   .text-only { color: var(--warn, #f5b942); }
+  .search-card { padding: 14px 16px; margin-top: 18px; }
+  .search-head { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .search-head h2 { margin: 0; font-size: 16px; }
+  .search-form { display: flex; gap: 8px; flex: 1; flex-wrap: wrap; align-items: center; }
+  .search-form input { flex: 1; min-width: 200px; background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 13px; }
+  .search-form input:focus { outline: none; border-color: var(--accent); }
+  .search-form select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 13px; }
+  .search-kinds { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .search-kinds .muted { margin-left: auto; font-size: 12px; }
+  .search-res { margin-top: 12px; max-height: 560px; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 8px; }
+  .search-group { margin: 10px 0 14px; }
+  .search-rec { font-size: 13px; margin-bottom: 4px; display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .search-rec .act { padding: 1px 8px; font-size: 12px; margin-left: 6px; }
+  .search-hit { display: flex; gap: 10px; padding: 4px 6px; border-radius: 6px; font-size: 13px; }
+  .search-hit:hover { background: rgba(255,255,255,.03); }
+  .search-t { min-width: 56px; color: var(--muted); font-variant-numeric: tabular-nums; text-decoration: none; font-size: 12px; padding-top: 2px; }
+  .search-t:hover { color: var(--accent); text-decoration: underline; }
+  .search-body { flex: 1; color: var(--text); text-decoration: none; min-width: 0; word-wrap: break-word; }
+  .search-body .ctx { color: var(--muted); font-size: 12px; }
+  .search-body .hit { margin: 1px 0; }
+  .search-body mark { background: rgba(255,215,94,.35); color: inherit; border-radius: 2px; }
+  .search-body .kind { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; padding: 1px 5px; border-radius: 4px; margin-right: 6px; background: rgba(155,135,255,.15); color: #b3a8ff; }
+  .search-body .k-speech { background: rgba(60,207,145,.13); color: var(--ok); } .search-body .k-summary { background: rgba(108,182,255,.15); color: #6cb6ff; }
+  .search-body .k-bookmark { background: rgba(255,215,94,.15); color: #ffd75e; } .search-body .k-title { background: rgba(255,159,67,.15); color: #ff9f43; }
   .settings { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
   .settings select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 13px; margin-left: 4px; }
   .settings > .act, .settings > .rmconfirm { margin-left: auto; }
@@ -1755,6 +1875,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   <div id="io"></div>
   <div id="scanAsks"></div>
   <div id="alerts"></div>
+  <div id="searchBox"></div>
   <div class="streamers-head">
     <h2>Streamers</h2>
     <form id="addForm" autocomplete="off">
@@ -2164,6 +2285,98 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     await load();
   }
 
+  // ---- search the text of all recordings
+  const SEARCH_KINDS = [['chat', 'Chat'], ['speech', 'Spoken words'], ['summary', 'Summaries'], ['title', 'Titles'], ['bookmark', 'Bookmarks']];
+  let searchState = { q: '', busy: false, res: null, err: null, by: 'text', in: '', kinds: SEARCH_KINDS.map(k => k[0]) };
+  function buildSearch() {
+    const box = $('#searchBox'); box.replaceChildren();
+    const card = el('div', 'card search-card');
+    const head = el('div', 'search-head');
+    head.append(el('h2', null, 'Search all recordings'));
+    const form = el('form', 'search-form'); form.autocomplete = 'off';
+    const inp = el('input'); inp.type = 'search'; inp.placeholder = searchState.by === 'name' ? 'A username…' : 'A word or phrase…'; inp.value = searchState.q; inp.maxLength = 100; inp.spellcheck = false; inp.id = 'searchQ';
+    const by = el('select'); [['text', 'in the text'], ['name', 'by username']].forEach(([v, t]) => { const o = el('option', null, t); o.value = v; by.append(o); }); by.value = searchState.by;
+    by.title = 'Search the words, or everything a chatter wrote';
+    by.onchange = () => { searchState.by = by.value; inp.placeholder = by.value === 'name' ? 'A username…' : 'A word or phrase…'; };
+    const where = el('select'); where.id = 'searchIn'; const o0 = el('option', null, 'All streamers'); o0.value = ''; where.append(o0);
+    (lastData ? lastData.channels : []).forEach(c => { const o = el('option', null, c.platform && c.platform.platform !== 'twitch' ? c.platform.label + ' ' + c.platform.name : c.name); o.value = c.name; where.append(o); });
+    where.value = searchState.in; where.onchange = () => { searchState.in = where.value; };
+    const go = el('button', 'act add', searchState.busy ? 'Searching…' : 'Search'); go.type = 'submit'; go.disabled = searchState.busy;
+    form.append(inp, by, where, go);
+    form.onsubmit = e => { e.preventDefault(); runSearch(inp.value.trim()); };
+    head.append(form);
+    card.append(head);
+    const kinds = el('div', 'search-kinds');
+    SEARCH_KINDS.forEach(([k, label]) => {
+      const l = el('label', 'chk'); const cb = el('input'); cb.type = 'checkbox'; cb.checked = searchState.kinds.includes(k);
+      cb.onchange = () => { searchState.kinds = SEARCH_KINDS.map(x => x[0]).filter(x => x === k ? cb.checked : searchState.kinds.includes(x)); };
+      l.append(cb, ' ' + label); kinds.append(l);
+    });
+    kinds.append(el('span', 'muted', 'Text stays searchable after a video is deleted.'));
+    card.append(kinds);
+    if (searchState.err) card.append(el('div', 'del-err pad', searchState.err));
+    if (searchState.res) card.append(searchResults(searchState.res));
+    box.append(card);
+  }
+  async function runSearch(q) {
+    if (q.length < 2) { searchState.err = 'Type at least 2 characters.'; buildSearch(); return; }
+    searchState.q = q; searchState.busy = true; searchState.err = null; buildSearch();
+    try {
+      const u = '?search=1&q=' + encodeURIComponent(q) + '&by=' + searchState.by + '&in=' + encodeURIComponent(searchState.in) + '&kinds=' + searchState.kinds.join(',');
+      const r = await fetch(u, { credentials: 'same-origin' });
+      const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+      if (!j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+      searchState.res = j;
+    } catch (e) { searchState.err = e.message; searchState.res = null; }
+    searchState.busy = false; buildSearch();
+  }
+  function searchResults(j) {
+    const wrap = el('div', 'search-res');
+    const kindName = { chat: 'chat', speech: 'spoken', summary: 'summary', title: 'title', bookmark: 'bookmark' };
+    wrap.append(el('div', 'rec-sub', j.hits.length ? j.hits.length + (j.more ? '+' : '') + ' found in ' + new Set(j.hits.map(h => h.channel + '/' + h.folder)).size + ' recording(s)'
+      + (j.more ? ' - showing the first ones (newest recordings first); narrow the search for more' : '') : 'Nothing found in ' + j.total + ' recording(s).'));
+    const q = searchState.q.toLowerCase();
+    const mark = (parent, text) => {
+      if (searchState.by === 'name') { parent.append(text); return; }
+      const lo = text.toLowerCase(); let i = 0, k;
+      while ((k = lo.indexOf(q, i)) !== -1) { if (k > i) parent.append(text.slice(i, k)); parent.append(el('mark', null, text.slice(k, k + q.length))); i = k + q.length; }
+      if (i < text.length) parent.append(text.slice(i));
+    };
+    let group = null, gkey = '';
+    j.hits.forEach(h => {
+      const key = h.channel + '/' + h.folder;
+      if (key !== gkey) {
+        gkey = key; group = el('div', 'search-group');
+        const t = el('div', 'search-rec');
+        const chan = (lastData && lastData.channels.find(c => c.name === h.channel)) || null;
+        const who = chan && chan.platform && chan.platform.platform !== 'twitch' ? chan.platform.label + ' ' + chan.platform.name : h.channel;
+        t.append(el('b', null, h.title || h.folder), el('span', 'muted', ' · ' + who + (h.started ? ' · ' + h.started.slice(0, 16) : '') + (h.text_only ? ' · text only' : '')));
+        const tl = el('a', 'act', 'Text'); tl.href = '?ch=' + encodeURIComponent(h.channel) + '&text=' + encodeURIComponent(h.folder); tl.target = '_blank'; tl.rel = 'noopener';
+        t.append(' ', tl);
+        group.append(t); wrap.append(group);
+      }
+      const row = el('div', 'search-hit');
+      const tab = h.kind === 'speech' ? 'speech' : h.kind === 'chat' ? 'chat' : h.kind === 'bookmark' ? 'moments' : 'summary';
+      const textUrl = '?ch=' + encodeURIComponent(h.channel) + '&text=' + encodeURIComponent(h.folder) + '#tab=' + tab + (h.t != null ? '&t=' + Math.floor(h.t) : '') + '&q=' + encodeURIComponent(searchState.by === 'name' ? '' : searchState.q);
+      const time = el('a', 'search-t', h.t != null ? hms(h.t) : '—');
+      if (h.t != null && h.video) { time.href = '?ch=' + encodeURIComponent(h.channel) + '&play=' + encodeURIComponent(h.folder) + '#t=' + Math.max(0, Math.floor(h.t) - 5); time.title = 'Play from here'; }
+      else { time.href = textUrl; time.title = 'Show it in the text view'; }
+      time.target = '_blank'; time.rel = 'noopener';
+      const body = el('a', 'search-body'); body.href = textUrl; body.target = '_blank'; body.rel = 'noopener'; body.title = 'Show it with what was around it';
+      (h.before || []).forEach(x => body.append(el('div', 'ctx', x)));
+      const main = el('div', 'hit');
+      main.append(el('span', 'kind k-' + h.kind, kindName[h.kind]));
+      if (h.name) { main.append(el('b', null, h.name + ': ')); }
+      mark(main, h.text);
+      body.append(main);
+      (h.after || []).forEach(x => body.append(el('div', 'ctx', x)));
+      row.append(time, body);
+      group.append(row);
+    });
+    return wrap;
+  }
+  function hms(s) { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); }
+
   // ---- PC scan
   const SCAN_ACTIVE = ['requested', 'preparing', 'ready', 'scanning'];
   const SCAN_TEXT = { ask: 'waiting for your choice', requested: 'starting - the server prepares the sound at the next cron run',
@@ -2504,6 +2717,8 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     renderMoments(data);
     renderAi(data);
     renderPlatTest(data);
+    if (!$('#searchBox').firstChild) buildSearch();
+    else { const w = $('#searchIn'); if (w && w.options.length !== data.channels.length + 1 && document.activeElement !== w) buildSearch(); }
     renderNotices(data);
     renderScanAsks(data);
     const now = data.now;
@@ -2691,6 +2906,13 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
           pl.target = '_blank'; pl.rel = 'noopener';
           pl.title = 'Watch with chat in a new tab';
           acts.append(pl);
+        }
+        if (r.status !== 'recording' && r.status !== 'interrupted') {
+          const tx = el('a', 'act', 'Text');
+          tx.href = '?ch=' + encodeURIComponent(c.name) + '&text=' + encodeURIComponent(r.folder);
+          tx.target = '_blank'; tx.rel = 'noopener';
+          tx.title = 'Read the summary, spoken words and chat, with chat activity and viewers' + (r.text_only ? ' (the video was deleted, the text is kept)' : '');
+          acts.append(tx);
         }
         const queuedYt = r.upload || (r.convert && r.convert.youtube);
         if (queuedYt) {

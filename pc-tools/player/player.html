@@ -38,7 +38,7 @@
   #seek:hover #seekKnob { transform: scale(1); }
   #seekMarks { position: absolute; left: 0; right: 0; top: 50%; height: 0; pointer-events: none; }
   #seekMarks b { position: absolute; top: -7px; width: 2px; height: 14px; margin-left: -1px; background: #ffd75e; border-radius: 1px; opacity: .9; }
-  #preview { position: absolute; bottom: 24px; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; }
+  #preview { position: absolute; bottom: 40px; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; }
   #seek:hover #preview { display: flex; }
   #preview canvas { width: 192px; height: 108px; border-radius: 8px; border: 2px solid rgba(255,255,255,.9); background: #111; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
   #preview canvas.none { display: none; }
@@ -119,6 +119,43 @@
   .msg.sys { color: #c9b8ff; background: rgba(155,135,255,.08); border-left: 3px solid var(--accent); padding: 4px 8px; margin: 3px 0; border-radius: 4px; }
   .msg.mod { color: var(--muted); font-style: italic; }
   .msg.act { font-style: italic; }
+  /* chat emotes as pictures */
+  img.emote { height: 1.75em; width: auto; vertical-align: middle; margin: -.35em .05em -.25em; }
+  /* chat activity and viewers above the seek bar, events on it */
+  #heat { position: absolute; left: 0; bottom: 12px; width: 100%; height: 24px; pointer-events: none; opacity: .9; }
+  #heat[hidden], #evMarks:empty { display: none; }
+  #evMarks { position: absolute; left: 0; right: 0; top: 50%; height: 0; pointer-events: none; }
+  #evMarks b { position: absolute; top: -4px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; border: 1px solid rgba(0,0,0,.6); }
+  #evMarks b.bookmark { background: #ffd75e; border-radius: 1px; transform: rotate(45deg); }
+  #evMarks b.raid { background: #ff9f43; } #evMarks b.gift { background: #ff8fd8; } #evMarks b.title { background: #6cb6ff; }
+  #evMarks b.peak { background: #3ccf91; } #evMarks b.busy { background: #c9b8ff; }
+  #pvEvent { font-size: 12px; max-width: 320px; text-align: center; background: rgba(0,0,0,.75); padding: 2px 8px; border-radius: 6px; }
+  #pvEvent:empty { display: none; }
+  /* bookmarks and events panel */
+  #tlPanel { position: absolute; right: 14px; top: 14px; bottom: 80px; z-index: 4; width: 320px; background: rgba(23,25,33,.97); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+  #tlPanel[hidden] { display: none; }
+  #tlPanel .sp-head { display: flex; justify-content: space-between; align-items: center; }
+  #tlAdd { display: flex; gap: 6px; } #tlAdd input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px; }
+  #tlList { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  #tlList .ev { display: flex; gap: 8px; align-items: baseline; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+  #tlList .ev:hover { background: rgba(255,255,255,.06); }
+  #tlList .ev .t { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; min-width: 52px; }
+  #tlList .ev .k { font-size: 11px; font-weight: 700; padding: 0 5px; border-radius: 4px; }
+  #tlList .ev .x { margin-left: auto; padding: 0 6px; font-size: 12px; background: none; border: 0; color: var(--muted); }
+  #tlList .ev .x:hover { color: #ff8080; }
+  #tlList .lbl { flex: 1; word-break: break-word; }
+  #tlList .muted, #tlPanel p { color: var(--muted); font-size: 12px; margin: 0; }
+  .k.bookmark { background: rgba(255,215,94,.18); color: #ffd75e; } .k.raid { background: rgba(255,159,67,.18); color: #ff9f43; }
+  .k.gift { background: rgba(255,143,216,.16); color: #ff8fd8; } .k.title { background: rgba(108,182,255,.16); color: #6cb6ff; }
+  .k.peak { background: rgba(60,207,145,.16); color: #3ccf91; } .k.busy { background: rgba(201,184,255,.16); color: #c9b8ff; }
+  /* chat on the video */
+  #ovChat { position: absolute; left: 14px; bottom: 78px; width: min(380px, 42%); pointer-events: none; display: flex; flex-direction: column; gap: 2px; z-index: 2; }
+  #ovChat[hidden] { display: none; }
+  #ovChat .msg { background: rgba(0,0,0,.55); color: #fff; padding: 3px 8px; border-radius: 6px; width: fit-content; max-width: 100%; text-shadow: 0 1px 2px #000; animation: ovIn .2s ease-out; font-size: max(12px, calc(var(--chat-size, 14px) * .95)); }
+  @keyframes ovIn { from { opacity: 0; transform: translateY(6px); } }
+  #stage.idle #ovChat { bottom: 18px; }
+  #cOv, #cTl { background: rgba(0,0,0,.4); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; font: inherit; font-size: 12px; padding: 3px 6px; margin-right: 4px; }
+  #cTl.on { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
 <body>
@@ -137,6 +174,7 @@
     <button id="popBtn" class="primary">Pop out chat</button>
     <button id="dockBtn">Dock chat</button>
     <button id="saveChatBtn" style="display:none" title="Save a chat.txt with the sync info built in, so meta.json is no longer needed">Save chat with sync info</button>
+    <a id="textLink" class="btn" style="display:none" title="Read the summary, spoken words and chat as text, and search them">Text view</a>
     <label class="btn" for="pickDir" title="Open another recording">Open…</label>
   </div>
 </header>
@@ -155,12 +193,21 @@
       <p>Drag the subtitles to move them; drag their corner to resize. Saved in this browser.</p>
       <div class="sp-row"><button id="spResetPos">Reset position</button><button id="spReset">Reset all</button></div>
     </div>
+    <div id="ovChat" hidden></div>
+    <div id="tlPanel" hidden>
+      <div class="sp-head"><b>Moments</b><button id="tlClose" title="Close">✕</button></div>
+      <div id="tlAdd"><input id="tlNote" maxlength="200" placeholder="Note for a bookmark here (optional)"><button id="tlAddBtn" class="primary">Bookmark</button></div>
+      <p id="tlWhere"></p>
+      <div id="tlList"></div>
+    </div>
     <div id="controls">
       <div id="seek" title="">
         <div class="track"><i id="seekBuf"></i><i id="seekPlay"></i></div>
+        <canvas id="heat" hidden></canvas>
         <div id="seekMarks"></div>
+        <div id="evMarks"></div>
         <div id="seekKnob"></div>
-        <div id="preview"><canvas id="pvCanvas" width="192" height="108"></canvas><span id="pvTime">0:00</span></div>
+        <div id="preview"><canvas id="pvCanvas" width="192" height="108"></canvas><span id="pvTime">0:00</span><span id="pvEvent"></span></div>
       </div>
       <div id="ctrlRow">
         <button id="cPlay" class="ic" title="Play (Space)"></button>
@@ -170,6 +217,8 @@
         <input id="cVol" type="range" min="0" max="1" step="0.05" value="1" title="Volume">
         <span id="cTime">0:00 / 0:00</span>
         <span class="grow"></span>
+        <button id="cTl" title="Bookmarks and moments: raids, title changes, busiest chat, viewer peak (B adds a bookmark)" style="display:none">&#9733; Moments</button>
+        <select id="cOv" title="Chat on the video" style="display:none"><option value="off">Chat on video: off</option><option value="full">Chat on video: in fullscreen</option><option value="on">Chat on video: always</option></select>
         <select id="cSubs" title="Subtitles (from the PC scan)" style="display:none"></select>
         <button id="cSubStyle" title="Subtitle style: size, colour, outline, background" style="display:none">Aa</button>
         <select id="cRate" title="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
@@ -463,8 +512,10 @@
       d.classList.add('trd');
       const b = doc.createElement('span'); b.className = 'body'; b.textContent = tr; b.title = 'Original: ' + m.text;
       d.appendChild(b);
+    } else if (asResult) {
+      markText(doc, d, m.text, search.field === 'text' ? search.q : '');
     } else {
-      markText(doc, d, m.text, asResult && search.field === 'text' ? search.q : '');
+      emoteText(doc, d, m.text);
     }
     return d;
   }
@@ -567,6 +618,17 @@
       tb.className = 'trbtn' + (showTr ? ' on' : '');
       bar.append(tb);
     }
+    if (emoteMap) {
+      const eb = doc.createElement('button'); eb.textContent = 'Emotes'; eb.className = 'emobtn' + (emotesOn ? ' on' : '');
+      eb.title = 'Show chat emotes as pictures (' + emoteMap.size + ' known for this recording; the pictures come from Twitch, BetterTTV, FrankerFaceZ or 7TV)';
+      eb.addEventListener('click', () => {
+        emotesOn = !emotesOn;
+        try { localStorage.setItem('stream-player-emotes', emotesOn ? '1' : '0'); } catch (e) {}
+        forEachBar(b => { const x = b.querySelector('button.emobtn'); if (x) x.className = 'emobtn' + (emotesOn ? ' on' : ''); });
+        rebuild(); ovKey = '';
+      });
+      bar.append(eb);
+    }
     bar.append(meRow, info);
   }
   function fillUserList(doc) {
@@ -610,6 +672,7 @@
       }
     }
     if (mode === 'popup' && popup && popup.closed) { popup = null; setMode('dock'); }
+    overlayTick();
     requestAnimationFrame(tick);
   }
 
@@ -673,6 +736,7 @@
     document.getElementById('offset').textContent = (offset > 0 ? '+' : '') + offset.toFixed(1) + 's';
     try { if (storageKey) localStorage.setItem(storageKey, String(offset)); } catch (e) {}
     rebuild();
+    drawTimeline();
   }
   document.querySelectorAll('[data-off]').forEach(b => b.addEventListener('click', () => setOffset(offset + parseFloat(b.dataset.off))));
 
@@ -696,9 +760,11 @@
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     videoUrl = URL.createObjectURL(vid);
     const ex = extrasFromFiles(files);
+    const txt = async n => { const f = byName(n); return f ? f.text() : null; };
     start({ url: videoUrl, name: vid.name, size: vid.size,
       chatText: chatFile ? await chatFile.text() : null,
       metaText: metaFile ? await metaFile.text() : null,
+      emotesText: await txt('emotes.json'), viewersText: await txt('viewers.txt'), bookmarksText: await txt('bookmarks.json'),
       subs: ex.subs, chatTrs: await Promise.all(ex.chats.map(async f => ({ lang: '', text: await f.text() }))) });
   }
 
@@ -734,6 +800,8 @@
     };
 
     setupExtras(src.subs || [], src.chatTrs || []);
+    setEmotes(src.emotesText);
+    momentsStart(src, meta);
     video.src = src.url;
     // Opened from a time in an AI summary (…#t=seconds): start there.
     const jump = /(?:^#|&)t=(\d+)/.exec(location.hash);
@@ -776,10 +844,11 @@
       return r.text();
     };
     try {
-      const [chatText, metaText] = await Promise.all([get(src.chat), get(src.meta)]);
+      const [chatText, metaText, emotesText, viewersText] = await Promise.all([get(src.chat), get(src.meta),
+        get(src.emotes).catch(() => null), get(src.viewers).catch(() => null)]);
       const extras = src.extras || [];
       const chatTrs = await Promise.all(extras.filter(x => x.kind === 'chat').map(async x => ({ lang: x.lang, text: await get(x.url).catch(() => '') })));
-      start({ url: src.video, name: src.name, size: src.size, chatText, metaText, remote: true, me: src.me,
+      start({ url: src.video, name: src.name, size: src.size, chatText, metaText, remote: true, me: src.me, emotesText, viewersText,
         subs: extras.filter(x => x.kind === 'subs').map(x => ({ url: x.url, lang: x.lang, original: !!x.original })), chatTrs });
     } catch (e) {
       toast('Could not load this recording (' + e.message + '). Reload the page to try again.', 10000);
@@ -875,7 +944,8 @@
     window.addEventListener('beforeunload', warnLeave);
     try {
       // Chat and meta first (small).
-      const extraFiles = (src.extras || []).map(x => [x.url, x.name]);
+      const extraFiles = (src.extras || []).map(x => [x.url, x.name])
+        .concat([[src.emotes, 'emotes.json'], [src.viewers, 'viewers.txt']].filter(x => x[0]));
       for (const [url, name] of [[src.chat, 'chat.txt'], [src.meta, 'meta.json']].concat(extraFiles)) {
         if (!url) continue;
         const r = await fetch(url, { credentials: 'same-origin', signal });
@@ -1129,7 +1199,9 @@
     const f = seekFrac(ev), t = f * video.duration;
     const r = seek.getBoundingClientRect();
     preview.style.left = Math.min(r.width - 100, Math.max(100, f * r.width)) + 'px';
-    pvTime.textContent = fmt(t);
+    pvTime.textContent = fmt(t) + heatAt(t);
+    const near = eventNear(t, video.duration * 0.006);
+    document.getElementById('pvEvent').textContent = near ? near.label : '';
     if (dragging) video.currentTime = t;
     wantThumb(t);
   });
@@ -1205,9 +1277,247 @@
     else if (e.key === 'm' || e.key === 'M') { video.muted = !video.muted; }
     else if (e.key === 'f' || e.key === 'F') { toggleFull(); }
     else if (e.key === 'c' || e.key === 'C') { setMode(mode === 'popup' ? 'dock' : 'popup'); }
+    else if ((e.key === 'b' || e.key === 'B') && video.src) { e.preventDefault(); openMoments(true); }
   }
   document.addEventListener('keydown', onKey);
   window.addEventListener('beforeunload', () => { if (popup && !popup.closed) popup.close(); });
+
+  // ------------------------------------------------------------ emotes as pictures
+  // emotes.json (made by the recorder): Twitch emotes seen in chat (by id) and the channel's BetterTTV,
+  // FrankerFaceZ and 7TV emotes (picture links). Only pictures from those sites are shown.
+  var emoteMap = null, emotesOn = true;
+  try { emotesOn = localStorage.getItem('stream-player-emotes') !== '0'; } catch (e) {}
+  const EMOTE_OK = /^https:\/\/(static-cdn\.jtvnw\.net|cdn\.betterttv\.net|cdn\.frankerfacez\.com|cdn\.7tv\.app|files\.kick\.com)\/[^\s"'<>]+$/;
+  function setEmotes(text) {
+    emoteMap = null;
+    if (!text) return;
+    try {
+      const j = JSON.parse(text), m = new Map();
+      Object.entries(j.extra || {}).forEach(([n, u]) => { if (typeof u === 'string' && EMOTE_OK.test(u)) m.set(n, u); });
+      Object.entries(j.twitch || {}).forEach(([n, id]) => { if (/^[A-Za-z0-9_]{1,80}$/.test(String(id))) m.set(n, 'https://static-cdn.jtvnw.net/emoticons/v2/' + id + '/default/dark/1.0'); });
+      if (m.size) emoteMap = m;
+    } catch (e) {}
+  }
+  function emoteText(doc, parent, text) {
+    if (!emotesOn || !emoteMap) { parent.appendChild(doc.createTextNode(text)); return; }
+    let buf = '';
+    for (const p of text.split(/(\s+)/)) {
+      const u = emoteMap.get(p);
+      if (!u) { buf += p; continue; }
+      if (buf) { parent.appendChild(doc.createTextNode(buf)); buf = ''; }
+      const img = doc.createElement('img');
+      img.className = 'emote'; img.alt = p; img.title = p; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer'; img.src = u;
+      parent.appendChild(img);
+    }
+    if (buf) parent.appendChild(doc.createTextNode(buf));
+  }
+
+  // ------------------------------------------------------------ moments: chat activity, viewers, events, bookmarks
+  let viewerPts = [];   // [[video seconds, viewers]]
+  let events = [];      // {t (video seconds), kind, label, chat: true if t is chat time (offset applies), id}
+  let bookmarks = [];   // {id, t, note}
+  let bmLocalKey = null;
+  const PS = window.PLAYER_SOURCE || null;
+  const BM = PS && PS.bookmarks && PS.bookmarks.api ? PS.bookmarks : null;   // kept on the server
+  const KIND = { bookmark: 'Bookmark', raid: 'Raid', gift: 'Gift subs', title: 'Title', peak: 'Most viewers', busy: 'Busy chat' };
+  if (PS && PS.text_url) { const a = document.getElementById('textLink'); a.href = PS.text_url; a.target = '_blank'; a.rel = 'noopener'; a.style.display = ''; }
+
+  function momentsStart(src, meta) {
+    viewerPts = [];
+    (src.viewersText || '').split(/\r?\n/).forEach(l => { const m = /^(\d+) (\d+)/.exec(l); if (m) viewerPts.push([+m[1], +m[2]]); });
+    const base = [];
+    (meta.changes || []).forEach((c, i) => {
+      if (i === 0 && !c.video) return;   // how it started
+      base.push({ t: +c.video || 0, kind: 'title', label: (c.title || '') + (c.game ? ' (' + c.game + ')' : '') });
+    });
+    messages.forEach(m => {
+      if (m.kind !== 'sys') return;
+      if (/\braid/i.test(m.text)) base.push({ t: m.t, kind: 'raid', label: m.text, chat: true });
+      else { const g = /\bgift(?:ing|ed)?\s+(\d+)\b/i.exec(m.text); if (g && +g[1] >= 5) base.push({ t: m.t, kind: 'gift', label: m.text, chat: true }); }
+    });
+    if (viewerPts.length) {
+      const top = viewerPts.reduce((a, b) => b[1] > a[1] ? b : a);
+      if (top[1] > 0) base.push({ t: top[0], kind: 'peak', label: top[1].toLocaleString() + ' viewers' });
+    }
+    // The busiest minutes in chat (at least 10 minutes apart).
+    if (messages.length > 50) {
+      const per = new Map();
+      messages.forEach(m => { const k = Math.floor(m.t / 60); per.set(k, (per.get(k) || 0) + 1); });
+      const avg = messages.length / Math.max(1, per.size);
+      const picked = [];
+      [...per.entries()].sort((a, b) => b[1] - a[1]).forEach(([k, n]) => {
+        if (picked.length < 5 && n >= Math.max(10, avg * 2.5) && picked.every(p => Math.abs(p - k) >= 10)) picked.push(k);
+      });
+      picked.forEach(k => base.push({ t: k * 60, kind: 'busy', label: per.get(k) + ' chat messages in this minute', chat: true }));
+    }
+    momentsStart.base = base;
+    // Bookmarks: on the server (opened from the dashboard), else on this PC.
+    bmLocalKey = 'stream-player-bookmarks:' + (meta.video_start || src.name + src.size);
+    if (BM) bookmarks = (BM.list || []).slice();
+    else {
+      let local = [];
+      try { local = JSON.parse(localStorage.getItem(bmLocalKey) || '[]'); } catch (e) {}
+      let fromFile = [];
+      try { fromFile = JSON.parse(src.bookmarksText || '[]'); } catch (e) {}
+      const seen = new Set(local.map(b => b.id));
+      bookmarks = local.concat((Array.isArray(fromFile) ? fromFile : []).filter(b => b && !seen.has(b.id)));
+    }
+    document.getElementById('cTl').style.display = '';
+    document.getElementById('cOv').style.display = messages.length ? '' : 'none';
+    refreshEvents();
+  }
+  function refreshEvents() {
+    events = (momentsStart.base || []).concat(bookmarks.filter(b => b && isFinite(b.t)).map(b => ({ t: +b.t, kind: 'bookmark', label: b.note || 'Bookmark', id: b.id })));
+    events.sort((a, b) => a.t - b.t);
+    drawTimeline();
+    renderMoments();
+  }
+  const evTime = e => e.t + (e.chat ? offset : 0);
+  function eventNear(t, within) {
+    let best = null;
+    events.forEach(e => { const d = Math.abs(evTime(e) - t); if (d <= within && (!best || d < Math.abs(evTime(best) - t))) best = e; });
+    return best ? { label: KIND[best.kind] + ': ' + best.label } : null;
+  }
+  let heatBins = null;
+  function heatAt(t) {
+    if (!heatBins || !video.duration) return '';
+    const i = Math.min(heatBins.n - 1, Math.floor(t / video.duration * heatBins.n));
+    const perMin = Math.round(heatBins.c[i] / (video.duration / heatBins.n) * 60);
+    let v = '';
+    if (viewerPts.length) { let best = viewerPts[0]; viewerPts.forEach(p => { if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p; }); v = ' · ' + best[1].toLocaleString() + ' viewers'; }
+    return (messages.length ? ' · ' + perMin + ' msgs/min' : '') + v;
+  }
+  function drawTimeline() {
+    const cv = document.getElementById('heat'), marks = document.getElementById('evMarks');
+    marks.replaceChildren();
+    const d = video.duration;
+    if (!d || (!messages.length && !viewerPts.length)) { cv.hidden = true; heatBins = null; }
+    else {
+      cv.hidden = false;
+      const w = Math.max(100, Math.round(cv.clientWidth * (window.devicePixelRatio || 1))), h = Math.round(24 * (window.devicePixelRatio || 1));
+      cv.width = w; cv.height = h;
+      const cx = cv.getContext('2d');
+      const n = Math.max(50, Math.min(600, Math.round(w / 3))), c = new Array(n).fill(0);
+      messages.forEach(m => { const i = Math.floor((m.t + offset) / d * n); if (i >= 0 && i < n) c[i]++; });
+      heatBins = { n, c };
+      const max = Math.max(1, ...c);
+      cx.fillStyle = 'rgba(155,135,255,.6)';
+      const bw = w / n;
+      c.forEach((v, i) => { if (!v) return; const bh = Math.max(1, Math.sqrt(v / max) * (h - 2)); cx.fillRect(i * bw, h - bh, Math.max(1, bw - 1), bh); });
+      if (viewerPts.length > 1) {
+        const vmax = Math.max(1, ...viewerPts.map(p => p[1]));
+        cx.strokeStyle = 'rgba(120,230,180,.9)'; cx.lineWidth = Math.max(1, window.devicePixelRatio || 1);
+        cx.beginPath();
+        viewerPts.forEach((p, i) => { const x = p[0] / d * w, y = h - 1 - p[1] / vmax * (h - 3); i ? cx.lineTo(x, y) : cx.moveTo(x, y); });
+        cx.stroke();
+      }
+    }
+    if (d) events.forEach(e => {
+      const b = document.createElement('b'); b.className = e.kind;
+      b.style.left = Math.min(100, Math.max(0, evTime(e) / d * 100)) + '%'; marks.appendChild(b);
+    });
+  }
+  video.addEventListener('durationchange', drawTimeline);
+  new ResizeObserver(() => drawTimeline()).observe(document.getElementById('seek'));
+
+  function renderMoments() {
+    const list = document.getElementById('tlList'); list.replaceChildren();
+    document.getElementById('tlWhere').textContent = BM ? 'Bookmarks are saved with the recording on the server.' : 'Bookmarks are saved in this browser.';
+    if (!events.length) { list.append(Object.assign(document.createElement('div'), { className: 'muted', textContent: 'Nothing yet. Press B while watching to bookmark a moment.' })); return; }
+    events.forEach(e => {
+      const row = document.createElement('div'); row.className = 'ev';
+      const t = document.createElement('span'); t.className = 't'; t.textContent = fmt(evTime(e));
+      const k = document.createElement('span'); k.className = 'k ' + e.kind; k.textContent = KIND[e.kind];
+      const l = document.createElement('span'); l.className = 'lbl'; l.textContent = e.label;
+      row.append(t, k, l);
+      row.addEventListener('click', () => { video.currentTime = Math.max(0, evTime(e) - (e.kind === 'bookmark' ? 0 : 5)); if (video.paused) video.play(); });
+      if (e.kind === 'bookmark') {
+        const x = document.createElement('button'); x.className = 'x'; x.textContent = '✕'; x.title = 'Delete this bookmark';
+        x.addEventListener('click', ev => { ev.stopPropagation(); bmChange({ op: 'delete', id: e.id }); });
+        row.append(x);
+      }
+      list.append(row);
+    });
+  }
+  async function bmChange(body) {
+    try {
+      if (BM) {
+        const r = await fetch(BM.api, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': BM.token },
+          body: JSON.stringify(Object.assign({ channel: PS.channel, folder: PS.name }, body)) });
+        const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+        if (!j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+        bookmarks = j.list;
+      } else {
+        if (body.op === 'add') bookmarks.push({ id: Date.now().toString(36), t: Math.round(body.t * 10) / 10, note: body.note, added: Math.floor(Date.now() / 1000) });
+        if (body.op === 'delete') bookmarks = bookmarks.filter(b => b.id !== body.id);
+        try { localStorage.setItem(bmLocalKey, JSON.stringify(bookmarks)); } catch (e) {}
+      }
+      refreshEvents();
+      return true;
+    } catch (e) { toast('Bookmark not saved: ' + e.message, 6000); return false; }
+  }
+  let bmAt = 0;
+  function openMoments(adding) {
+    const p = document.getElementById('tlPanel');
+    p.hidden = false; document.getElementById('cTl').classList.add('on');
+    renderMoments();
+    if (adding) {
+      bmAt = video.currentTime;
+      const n = document.getElementById('tlNote');
+      n.placeholder = 'Note for a bookmark at ' + fmt(bmAt) + ' (optional)';
+      n.focus();
+    }
+  }
+  function closeMoments() { document.getElementById('tlPanel').hidden = true; document.getElementById('cTl').classList.remove('on'); }
+  (function momentsSetup() {
+    const note = document.getElementById('tlNote');
+    document.getElementById('cTl').addEventListener('click', e => { e.currentTarget.blur(); document.getElementById('tlPanel').hidden ? openMoments(false) : closeMoments(); });
+    document.getElementById('tlClose').onclick = closeMoments;
+    const add = async () => {
+      const t = document.activeElement === note || note.value ? bmAt || video.currentTime : video.currentTime;
+      if (await bmChange({ op: 'add', t, note: note.value.trim() })) { toast('Bookmarked ' + fmt(t), 2500); note.value = ''; note.blur(); bmAt = 0; note.placeholder = 'Note for a bookmark here (optional)'; }
+    };
+    document.getElementById('tlAddBtn').onclick = add;
+    note.addEventListener('focus', () => { if (!bmAt) bmAt = video.currentTime; });
+    note.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') add(); if (e.key === 'Escape') { note.blur(); closeMoments(); } });
+    const panel = document.getElementById('tlPanel');
+    panel.addEventListener('click', e => e.stopPropagation());
+    panel.addEventListener('dblclick', e => e.stopPropagation());
+  })();
+
+  // ------------------------------------------------------------ chat on the video (can be switched off)
+  let ovPref = 'full';
+  try { ovPref = localStorage.getItem('stream-player-overlay') || 'full'; } catch (e) {}
+  const ovSel = document.getElementById('cOv'), ovBox = document.getElementById('ovChat');
+  ovSel.value = ovPref;
+  ovSel.addEventListener('change', () => { ovPref = ovSel.value; try { localStorage.setItem('stream-player-overlay', ovPref); } catch (e) {} ovSel.blur(); ovKey = ''; });
+  var ovKey = '';
+  function overlayTick() {
+    const on = messages.length && !search.q && (ovPref === 'on' || (ovPref === 'full' && !!document.fullscreenElement));
+    if (!on) { if (!ovBox.hidden) { ovBox.hidden = true; ovKey = ''; } return; }
+    const now = video.currentTime, upto = lastIndexAt(now);
+    const show = [];
+    for (let i = upto; i >= 0 && show.length < 7; i--) {
+      const m = messages[i];
+      if (now - (m.t + offset) > 14) break;
+      show.unshift(i);
+    }
+    const key = show.join(',');
+    ovBox.hidden = !show.length;
+    if (key === ovKey) return;
+    ovKey = key;
+    ovBox.replaceChildren(...show.map(i => {
+      const m = messages[i], d = document.createElement('div');
+      d.className = 'msg' + (m.kind !== 'chat' ? ' ' + m.kind : '');
+      if (m.name) {
+        const n = document.createElement('span'); n.className = 'name'; n.style.color = colorFor(m.name); n.textContent = m.name;
+        d.append(n, document.createTextNode(m.kind === 'act' ? ' ' : ': '));
+      }
+      const tr = showTr && chatTr ? chatTr[m.text] : null;
+      if (tr) d.append(document.createTextNode(tr)); else emoteText(document, d, m.text);
+      return d;
+    }));
+  }
 
   requestAnimationFrame(tick);
 })();

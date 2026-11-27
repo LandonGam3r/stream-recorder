@@ -162,7 +162,8 @@ function platform_stream_info(array $P)
                 'title' => clean_text((string)($ls['session_title'] ?? '')),
                 // Kick gives "2026-11-27 09:00:00" in UTC, without saying so.
                 'createdAt' => (function ($t) { return preg_match('/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/', $t) ? "$t UTC" : $t; })((string)($ls['created_at'] ?? $ls['start_time'] ?? date('c'))),
-                'game' => ['name' => clean_text((string)($ls['categories'][0]['name'] ?? ''))]];
+                'game' => ['name' => clean_text((string)($ls['categories'][0]['name'] ?? ''))],
+                'viewers' => isset($ls['viewer_count']) ? (int)$ls['viewer_count'] : null];
         }
         return ['exists' => true, 'display' => preg_match('/^[\p{L}\p{N}_ -]{1,40}$/u', $display) ? $display : $P['name'], 'stream' => $stream];
     }

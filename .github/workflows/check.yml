@@ -42,7 +42,7 @@ jobs:
         run: python3 -m unittest discover -s tests -p "test_*.py"
       - name: JavaScript syntax
         run: |
-          for f in dashboard/player.html dashboard/index.php; do
+          for f in dashboard/player.html dashboard/index.php dashboard/text.html; do
             python3 - "$f" <<'PY'
           import sys
           src = open(sys.argv[1], encoding='utf-8').read()

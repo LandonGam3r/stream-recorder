@@ -89,6 +89,7 @@ const CHANNELS_FILE = __DIR__ . '/channels.json'; // the streamer list, edited f
 const MOMENTS_FILE  = __DIR__ . '/moments.json';  // YouTube "moments" rules, edited from the dashboard
 require_once __DIR__ . '/platforms.php'; // Twitch, Kick, YouTube Live: streamer keys and live checks
 require_once __DIR__ . '/archive.php';   // text archive (delete footage, keep text) and storage rules
+require_once __DIR__ . '/streamdata.php'; // viewer counts, emotes, bookmarks, search
 if (is_file(__DIR__ . '/moments.php')) require_once __DIR__ . '/moments.php';
 if (is_file(__DIR__ . '/scan.php')) require_once __DIR__ . '/scan.php';     // PC scan (subtitles, translation, spoken moments)
 if (is_file(__DIR__ . '/summary.php')) require_once __DIR__ . '/summary.php'; // AI summary of a stream
@@ -327,6 +328,7 @@ if (($state['stream_id'] ?? null) !== $stream['id']) {
         'kills'            => 0,
         'longest_run'      => 0,
         'recent_chat_ids'  => [],
+        'user_id'          => $info['user_id'] ?? '',
     ];
     logmsg(sprintf(
         'LIVE: %s - "%s" (%s). Host info: PHP %s, SAPI %s, max_execution_time=%s, memory_limit=%s, MIN/MAX_RUNTIME=%d/%d',
@@ -408,6 +410,7 @@ if ($chatBuffer) {
     $chatBuffer = [];
 }
 
+$viewersNow = $stream['viewers'] ?? null; // from this run's live check
 $nextPoll   = 0.0;
 $fails      = 0;
 $firstFetch = true;
@@ -557,6 +560,18 @@ while (true) {
             }
         }
 
+        // Viewer count once a minute (the run's own live check gives the first one).
+        if (empty($state['capped']) && time() - (int)($state['viewers_at'] ?? 0) >= 60) {
+            $state['viewers_at'] = time();
+            $vi = $viewersNow ?? null;
+            $viewersNow = null;
+            if ($vi === null) {
+                $chk = get_stream_info($channel);
+                $vi = is_array($chk) && !empty($chk['stream']) ? ($chk['stream']['viewers'] ?? null) : null;
+            }
+            if ($vi !== null && !empty($state['video_start'])) viewers_append($recDir, (float)$state['seconds'], (int)$vi);
+        }
+
         $state['heartbeat'] = time();
         save_state($state);
     }
@@ -587,6 +602,7 @@ if ($chat) {
 }
 if ($video) fclose($video);
 if ($chatFile) fclose($chatFile);
+if (!empty($GLOBALS['emotesSeen'])) emotes_merge($recDir, $GLOBALS['emotesSeen']);
 
 $runTime = (int)round(microtime(true) - $runStart);
 $state['longest_run'] = max($state['longest_run'], $runTime);
@@ -728,7 +744,7 @@ function get_stream_info(string $login)
     $P = platform_parse($login);
     if ($P && $P['platform'] !== 'twitch') return platform_stream_info($P);
     $d = gql(
-        'query($login: String!) { user(login: $login) { displayName stream { id title createdAt game { name } } } }',
+        'query($login: String!) { user(login: $login) { id displayName stream { id title createdAt viewersCount game { name } } } }',
         ['login' => $login]
     );
     if ($d === null) return false;
@@ -741,7 +757,9 @@ function get_stream_info(string $login)
         $stream['id'] = preg_replace('/\D/', '', (string)($stream['id'] ?? '')) ?: '0';
     }
     $display = clean_text((string)$d['user']['displayName']);
-    return ['exists' => true, 'display' => preg_match('/^[\p{L}\p{N}_ ]{1,40}$/u', $display) ? $display : $login, 'stream' => $stream];
+    if (is_array($stream)) $stream['viewers'] = isset($stream['viewersCount']) ? (int)$stream['viewersCount'] : null;
+    return ['exists' => true, 'display' => preg_match('/^[\p{L}\p{N}_ ]{1,40}$/u', $display) ? $display : $login, 'stream' => $stream,
+        'user_id' => preg_replace('/\D/', '', (string)($d['user']['id'] ?? ''))];
 }
 
 /**
@@ -1154,6 +1172,7 @@ function write_chat($file, array $msgs, array &$state): int
         if (isset($seen[$m['id']])) continue;
         $seen[$m['id']] = true;
         $state['recent_chat_ids'][] = $m['id'];
+        if (!empty($m['emotes'])) $GLOBALS['emotesSeen'] = ($GLOBALS['emotesSeen'] ?? []) + $m['emotes'];
         fwrite($file, '[' . date('Y-m-d H:i:s', (int)$m['ts']) . '] ' . $m['text'] . "\n");
         $n++;
     }
@@ -1183,7 +1202,9 @@ function format_chat_line(string $raw): ?array
 
     switch ($m[2]) {
         case 'PRIVMSG':
-            $text = preg_match('/^\x01ACTION (.*)\x01$/', (string)$msg, $a) ? "* $name {$a[1]}" : "$name: $msg";
+            $isAct = preg_match('/^\x01ACTION (.*)\x01$/', (string)$msg, $a);
+            $text = $isAct ? "* $name {$a[1]}" : "$name: $msg";
+            $emotes = twitch_message_emotes((string)($tags['emotes'] ?? ''), $isAct ? $a[1] : (string)$msg);
             break;
         case 'USERNOTICE': // subs, gift subs, raids
             $sys = str_replace(['\s', '\:', '\\\\'], [' ', ';', '\\'], $tags['system-msg'] ?? '');
@@ -1202,7 +1223,7 @@ function format_chat_line(string $raw): ?array
             return null;
     }
     $ts = isset($tags['tmi-sent-ts']) ? ((int)$tags['tmi-sent-ts']) / 1000 : time();
-    return ['id' => $tags['id'] ?? md5($raw), 'ts' => $ts, 'text' => clean_text($text)];
+    return ['id' => $tags['id'] ?? md5($raw), 'ts' => $ts, 'text' => clean_text($text), 'emotes' => $emotes ?? []];
 }
 
 // ---------------------------------------------------------------- token storage (encrypted)
@@ -2638,6 +2659,13 @@ function finalize(array $s, string $display, string $chanDir): void
 
     write_meta($recDir, $s, $display, ['stream_ended' => date('Y-m-d H:i:s'), 'recorded_seconds' => round((float)$s['seconds'])]);
     embed_meta_in_chat($recDir);
+    // Emotes from BetterTTV, FrankerFaceZ and 7TV as they are now, so the player can show them as pictures.
+    if (platform_of(basename($chanDir)) === 'twitch' && is_file("$recDir/chat.txt")) {
+        $uid = (string)($s['user_id'] ?? '');
+        if ($uid === '') { $i = get_stream_info(basename($chanDir)); $uid = is_array($i) ? (string)($i['user_id'] ?? '') : ''; }
+        $extra = emotes_third_party($uid);
+        if ($extra) { $e = emotes_load($recDir); $e['extra'] = $extra; emotes_save($recDir, $e); }
+    }
     $mo = apply_moments($recDir);
     if ($mo && $mo['moments']) {
         $summary .= "\nMoments found:    " . count($mo['moments']) . ($mo['labels'] ? ' (' . implode(', ', $mo['labels']) . ')' : '');
