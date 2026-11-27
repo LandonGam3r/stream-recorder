@@ -243,7 +243,11 @@ def load_whisper(size: str, cpu_only: bool = False):
     try:
         import ctranslate2  # comes with faster-whisper
         if ctranslate2.get_cuda_device_count() > 0 and not cpu_only:
-            tries = [("cuda", "float16"), ("cuda", "int8_float32"), ("cuda", "float32")] + tries
+            if card_too_old(ctranslate2):
+                say("Your NVIDIA graphics card is too old for the speech engine (it offers only float32, and that fails on\n"
+                    "  such cards) - using the processor. Installing more libraries won't change this.")
+            else:
+                tries = [("cuda", "float16"), ("cuda", "int8_float32"), ("cuda", "float32")] + tries
     except Exception:
         pass
     say(f"Loading the speech model ({size}) - the first time it's downloaded (about 500 MB for small)...")
@@ -269,6 +273,16 @@ def load_whisper(size: str, cpu_only: bool = False):
     raise UserError(f"The speech model could not be loaded: {last}")
 
 
+def card_too_old(ctranslate2) -> bool:
+    """Cards that offer neither float16 nor int8 (roughly older than the GTX 10 series) can't run the speech
+    engine's GPU code: it fails with "invalid device ordinal" or "no kernel image"."""
+    try:
+        kinds = set(ctranslate2.get_supported_compute_types("cuda"))
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(kinds) and not (kinds & {"float16", "int8", "int8_float16", "int8_float32", "bfloat16", "int8_bfloat16"})
+
+
 def gpu_check() -> None:
     need("faster_whisper", "faster-whisper")
     cuda_dlls()
@@ -291,7 +305,12 @@ def gpu_check() -> None:
             return
         except Exception as e:  # noqa: BLE001
             say(f"  {compute}: {str(e)[:400]}")
-    say("\nThe card could not be used. Send these lines along and it can be fixed.")
+    if card_too_old(ctranslate2):
+        say("\nThis card is too old for the speech engine: it offers only float32, which fails on such cards.\n"
+            "The tool uses the processor; installing more libraries won't change that.\n"
+            "Faster on the processor: Summarize.bat --whisper-model base (a bit less accurate).")
+    else:
+        say("\nThe card could not be used. Send these lines along and it can be fixed.")
 
 
 def transcribe(media: Path, language: str | None, size: str, partial: Path, cpu_only: bool = False) -> tuple:
