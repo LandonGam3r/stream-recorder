@@ -128,7 +128,7 @@
   #evMarks b { position: absolute; top: -4px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; border: 1px solid rgba(0,0,0,.6); }
   #evMarks b.bookmark { background: #ffd75e; border-radius: 1px; transform: rotate(45deg); }
   #evMarks b.raid { background: #ff9f43; } #evMarks b.gift { background: #ff8fd8; } #evMarks b.title { background: #6cb6ff; }
-  #evMarks b.peak { background: #3ccf91; } #evMarks b.busy { background: #c9b8ff; }
+  #evMarks b.peak { background: #3ccf91; } #evMarks b.busy { background: #c9b8ff; } #evMarks b.moment { background: #5fd3c6; }
   #pvEvent { font-size: 12px; max-width: 320px; text-align: center; background: rgba(0,0,0,.75); padding: 2px 8px; border-radius: 6px; }
   #pvEvent:empty { display: none; }
   /* bookmarks and events panel */
@@ -148,12 +148,16 @@
   .k.bookmark { background: rgba(255,215,94,.18); color: #ffd75e; } .k.raid { background: rgba(255,159,67,.18); color: #ff9f43; }
   .k.gift { background: rgba(255,143,216,.16); color: #ff8fd8; } .k.title { background: rgba(108,182,255,.16); color: #6cb6ff; }
   .k.peak { background: rgba(60,207,145,.16); color: #3ccf91; } .k.busy { background: rgba(201,184,255,.16); color: #c9b8ff; }
+  .k.moment { background: rgba(95,211,198,.16); color: #5fd3c6; }
   /* chat on the video */
-  #ovChat { position: absolute; left: 14px; bottom: 78px; width: min(380px, 42%); pointer-events: none; display: flex; flex-direction: column; gap: 2px; z-index: 2; }
+  #ovChat { position: absolute; left: 1.5%; bottom: 12%; width: 30%; min-width: 160px; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; z-index: 2;
+            cursor: move; touch-action: none; user-select: none; border: 1px dashed transparent; border-radius: 8px; padding: 3px; }
+  #ovChat:hover, #ovChat.drag { border-color: rgba(255,255,255,.4); }
+  #ovChat i.grip { position: absolute; right: -6px; bottom: -6px; width: 14px; height: 14px; border-right: 3px solid rgba(255,255,255,.8); border-bottom: 3px solid rgba(255,255,255,.8); cursor: ew-resize; display: none; }
+  #ovChat:hover i.grip, #ovChat.drag i.grip { display: block; }
   #ovChat[hidden] { display: none; }
   #ovChat .msg { background: rgba(0,0,0,.55); color: #fff; padding: 3px 8px; border-radius: 6px; width: fit-content; max-width: 100%; text-shadow: 0 1px 2px #000; animation: ovIn .2s ease-out; font-size: max(12px, calc(var(--chat-size, 14px) * .95)); }
   @keyframes ovIn { from { opacity: 0; transform: translateY(6px); } }
-  #stage.idle #ovChat { bottom: 18px; }
   #cOv, #cTl { background: rgba(0,0,0,.4); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; font: inherit; font-size: 12px; padding: 3px 6px; margin-right: 4px; }
   #cTl.on { border-color: var(--accent); color: var(--accent); }
 </style>
@@ -1319,7 +1323,7 @@
   let bmLocalKey = null;
   const PS = window.PLAYER_SOURCE || null;
   const BM = PS && PS.bookmarks && PS.bookmarks.api ? PS.bookmarks : null;   // kept on the server
-  const KIND = { bookmark: 'Bookmark', raid: 'Raid', gift: 'Gift subs', title: 'Title', peak: 'Most viewers', busy: 'Busy chat' };
+  const KIND = { bookmark: 'Bookmark', moment: 'Moment', raid: 'Raid', gift: 'Gift subs', title: 'Title', peak: 'Most viewers', busy: 'Busy chat' };
   if (PS && PS.text_url) { const a = document.getElementById('textLink'); a.href = PS.text_url; a.target = '_blank'; a.rel = 'noopener'; a.style.display = ''; }
 
   function momentsStart(src, meta) {
@@ -1335,6 +1339,8 @@
       if (/\braid/i.test(m.text)) base.push({ t: m.t, kind: 'raid', label: m.text, chat: true });
       else { const g = /\bgift(?:ing|ed)?\s+(\d+)\b/i.exec(m.text); if (g && +g[1] >= 5) base.push({ t: m.t, kind: 'gift', label: m.text, chat: true }); }
     });
+    // Found by your YouTube moment rules (chat words, bursts, spoken words), as in the YouTube description.
+    (meta.moments || []).forEach(m => { if (Array.isArray(m) && isFinite(m[0])) base.push({ t: +m[0], kind: 'moment', label: String(m[1] || '') + (m[2] ? ' - ' + String(m[2]) : '') }); });
     if (viewerPts.length) {
       const top = viewerPts.reduce((a, b) => b[1] > a[1] ? b : a);
       if (top[1] > 0) base.push({ t: top[0], kind: 'peak', label: top[1].toLocaleString() + ' viewers' });
@@ -1491,6 +1497,37 @@
   const ovSel = document.getElementById('cOv'), ovBox = document.getElementById('ovChat');
   ovSel.value = ovPref;
   ovSel.addEventListener('change', () => { ovPref = ovSel.value; try { localStorage.setItem('stream-player-overlay', ovPref); } catch (e) {} ovSel.blur(); ovKey = ''; });
+  // Where it sits: drag it anywhere on the video, drag the corner for its width, double-click to put it back.
+  const OV_DEFAULT = { x: 0.015, y: 0.12, w: 0.3 }; // y = distance from the bottom, so new lines push older ones up
+  let ovPos = Object.assign({}, OV_DEFAULT);
+  try { Object.assign(ovPos, JSON.parse(localStorage.getItem('stream-player-overlay-pos') || '{}')); } catch (e) {}
+  function ovApply() {
+    ovBox.style.left = (ovPos.x * 100) + '%'; ovBox.style.bottom = (ovPos.y * 100) + '%'; ovBox.style.width = (ovPos.w * 100) + '%';
+  }
+  (function ovDrag() {
+    let drag = null;
+    ovBox.addEventListener('pointerdown', e => {
+      const st = stage.getBoundingClientRect();
+      drag = { mode: e.target.classList.contains('grip') ? 'size' : 'move', x0: e.clientX, y0: e.clientY, p: Object.assign({}, ovPos), w: st.width, h: st.height };
+      ovBox.setPointerCapture(e.pointerId); ovBox.classList.add('drag'); e.preventDefault(); e.stopPropagation();
+    });
+    ovBox.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const dx = (e.clientX - drag.x0) / drag.w, dy = (e.clientY - drag.y0) / drag.h;
+      if (drag.mode === 'move') {
+        const hh = ovBox.getBoundingClientRect().height / drag.h;
+        ovPos.x = Math.min(1 - ovPos.w, Math.max(0, drag.p.x + dx));
+        ovPos.y = Math.min(Math.max(0, 1 - hh), Math.max(0, drag.p.y - dy));
+      } else ovPos.w = Math.min(1 - ovPos.x, Math.max(0.12, drag.p.w + dx));
+      ovApply();
+    });
+    const end = () => { if (!drag) return; drag = null; ovBox.classList.remove('drag'); try { localStorage.setItem('stream-player-overlay-pos', JSON.stringify(ovPos)); } catch (e) {} };
+    ovBox.addEventListener('pointerup', end); ovBox.addEventListener('pointercancel', end);
+    ovBox.addEventListener('click', e => e.stopPropagation());
+    ovBox.addEventListener('dblclick', e => { e.stopPropagation(); ovPos = Object.assign({}, OV_DEFAULT); ovApply(); try { localStorage.removeItem('stream-player-overlay-pos'); } catch (x) {} });
+    ovBox.title = 'Drag to move · drag the corner for the width · double-click to put it back';
+    ovApply();
+  })();
   var ovKey = '';
   function overlayTick() {
     const on = messages.length && !search.q && (ovPref === 'on' || (ovPref === 'full' && !!document.fullscreenElement));
@@ -1506,7 +1543,7 @@
     ovBox.hidden = !show.length;
     if (key === ovKey) return;
     ovKey = key;
-    ovBox.replaceChildren(...show.map(i => {
+    ovBox.replaceChildren(Object.assign(document.createElement('i'), { className: 'grip' }), ...show.map(i => {
       const m = messages[i], d = document.createElement('div');
       d.className = 'msg' + (m.kind !== 'chat' ? ' ' + m.kind : '');
       if (m.name) {
