@@ -2,6 +2,11 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [1.8.6] - 2026-11-27
+
+### Fixed
+- **Summary tool: older NVIDIA cards.** Cards that offer only float32 (roughly older than the GTX 10 series) fail in the speech engine with "invalid device ordinal". The tool now recognises them, says so once and goes straight to the processor, instead of trying the card and suggesting libraries that can't help. `--gpu-check` explains the same.
+
 ## [1.8.5] - 2026-11-27
 
 ### Fixed
@@ -290,6 +295,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[1.8.6]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.5...v1.8.6
 [1.8.5]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.4...v1.8.5
 [1.8.4]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.3...v1.8.4
 [1.8.3]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.2...v1.8.3
