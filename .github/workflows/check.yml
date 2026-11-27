@@ -36,6 +36,10 @@ jobs:
           php-version: '8.0'
       - name: PHP syntax (8.0, the minimum)
         run: for f in server/*.php dashboard/*.php; do php -l "$f"; done
+      - name: Automated tests (server)
+        run: php tests/run.php
+      - name: Automated tests (PC summary tool)
+        run: python3 -m unittest discover -s tests -p "test_*.py"
       - name: JavaScript syntax
         run: |
           for f in dashboard/player.html dashboard/index.php; do

@@ -33,3 +33,4 @@ pc-tools/**/__pycache__/
 Thumbs.db
 .idea/
 .vscode/
+__pycache__/

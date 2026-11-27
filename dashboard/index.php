@@ -35,6 +35,10 @@ function recorder_dir(): string
     return '';
 }
 define('REC_DIR', recorder_dir());
+// Streamer keys for Twitch / Kick / YouTube and the text archive (both next to record.php).
+if (REC_DIR !== '' && is_file(REC_DIR . '/platforms.php')) require_once REC_DIR . '/platforms.php';
+if (REC_DIR !== '' && is_file(REC_DIR . '/archive.php')) require_once REC_DIR . '/archive.php';
+if (!defined('STREAMER_KEY_RE')) define('STREAMER_KEY_RE', '/^[a-z0-9_]{1,40}$/');
 // ==================================================================
 
 header('X-Robots-Tag: noindex, nofollow');
@@ -239,7 +243,7 @@ function login_page(string $error = '', int $code = 200): void
 }
 
 if (!$authed) {
-    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi', 'lib', 'logout', 'keyfile', 'aisummary']));
+    $isPage = !array_intersect_key($_GET, array_flip(['api', 'io', 'file', 'play', 'delete', 'streamers', 'log', 'moments', 'upload', 'scan', 'scanapi', 'lib', 'logout', 'keyfile', 'aisummary', 'footage', 'platformtest']));
     if (isset($_GET['api']) || isset($_GET['io'])) { // the open dashboard noticed it's logged out: reload shows the login form
         http_response_code(401);
         header('Content-Type: application/json');
@@ -307,7 +311,7 @@ function collect(): array
     $list = read_json(REC_DIR . '/channels.json');
     $names = array_keys($list);
     foreach (glob("$rec/*", GLOB_ONLYDIR) ?: [] as $d) $names[] = basename($d);
-    $names = array_values(array_unique(array_filter($names, function ($n) { return is_string($n) && preg_match('/^[a-z0-9_]{1,40}$/', $n); })));
+    $names = array_values(array_unique(array_filter($names, function ($n) { return is_string($n) && preg_match(STREAMER_KEY_RE, $n); })));
     foreach ($names as $name) {
         $chanDir = "$rec/$name";
         $st = read_json("$chanDir/state.json");
@@ -375,6 +379,9 @@ function collect(): array
                 'busy' => recording_busy($d, $st, $convertQ),
                 'scan' => scan_info($d),
                 'ai' => ai_info($d, $aiSpent),
+                // Footage deleted, text kept (chat, transcript, summary): still listed and searchable.
+                'text_only' => !empty($meta['footage_deleted']) ? ['when' => $meta['footage_deleted'], 'why' => $meta['footage_deleted_why'] ?? '', 'freed' => $meta['footage_bytes'] ?? 0] : null,
+                'keep_footage' => !empty($meta['keep_footage']),
             ];
         }
         $channels[] = [
@@ -408,6 +415,8 @@ function collect(): array
             'youtube' => (string)($list[$name]['youtube'] ?? ''),
             'twitch_auth' => (string)($list[$name]['twitch_auth'] ?? 'auto'),
             'pc_scan' => (string)($list[$name]['pc_scan'] ?? 'off'),
+            'platform' => function_exists('platform_parse') ? (platform_parse($name) ?? ['platform' => 'twitch', 'label' => 'Twitch', 'name' => $name]) : ['platform' => 'twitch', 'label' => 'Twitch', 'name' => $name],
+            'storage' => $list[$name]['storage'] ?? null,
             'not_found' => !empty($st['not_found']),
             'wrapping_up' => !empty($st['stream_id']) && empty($list[$name]['enabled']),
         ];
@@ -468,6 +477,8 @@ function collect(): array
         'now' => $now,
         'processes' => $procs,
         'ai_summary' => ai_status($aiSpent),
+        'platform_test' => read_json(REC_DIR . '/recordings/.platform_test.json') ?: null,
+        'platforms_ready' => function_exists('platform_parse'),
         'moments' => ['rules' => array_values(array_filter((array)read_json(REC_DIR . '/moments.json'), 'is_array')), 'available' => is_file(REC_DIR . '/moments.php')],
         'channels' => $channels,
         'twitch_token' => $token ? ['status' => $token['status'] ?? '?', 'detail' => $token['detail'] ?? '', 'checked' => $token['checked'] ?? null] : null,
@@ -482,6 +493,16 @@ function collect(): array
     ];
 }
 
+/** "older than 30 days, newest 10" for the log. */
+function storage_text($r): string
+{
+    $r = is_array($r) ? $r : [];
+    $p = [];
+    if ((int)($r['footage_days'] ?? 0) > 0) $p[] = 'footage older than ' . (int)$r['footage_days'] . ' days deleted';
+    if ((int)($r['keep_last'] ?? 0) > 0) $p[] = 'footage of the newest ' . (int)$r['keep_last'] . ' kept';
+    return $p ? implode(', ', $p) . ' (text always kept)' : 'keep everything';
+}
+
 /** Why this recording can't be deleted right now, or null. */
 function recording_busy(string $d, array $st, array $convertQ): ?string
 {
@@ -494,7 +515,7 @@ function recording_busy(string $d, array $st, array $convertQ): ?string
 function recording_dir($chan, $folder): ?string
 {
     if (!is_string($chan) || !is_string($folder)) return null;
-    if (!preg_match('/^[a-z0-9_]{1,40}$/', $chan) || !preg_match('/^[A-Za-z0-9_-]{1,80}$/', $folder)) return null;
+    if (!preg_match(STREAMER_KEY_RE, $chan) || !preg_match('/^[A-Za-z0-9_-]{1,80}$/', $folder)) return null;
     $root = realpath(REC_DIR . '/recordings');
     $d = realpath("$root/$chan/$folder");
     if (!$root || !$d || !is_dir($d) || dirname($d, 2) !== $root) return null;
@@ -957,7 +978,7 @@ if (isset($_GET['scanapi'])) {
 if (isset($_GET['log'])) {
     $ch = (string)$_GET['log'];
     if ($ch === '_system') $f = REC_DIR . '/recordings/.system.log';
-    elseif (preg_match('/^[a-z0-9_]{1,40}$/', $ch)) $f = REC_DIR . "/recordings/$ch/recorder.log";
+    elseif (preg_match(STREAMER_KEY_RE, $ch)) $f = REC_DIR . "/recordings/$ch/recorder.log";
     else not_found();
     if (!empty($_GET['old'])) $f .= '.1'; // the part before the last rotation
     if (!is_file($f)) not_found();
@@ -1135,8 +1156,16 @@ if (isset($_GET['aisummary'])) {
 if (isset($_GET['streamers'])) {
     $in = check_action_request();
     $op = (string)($in['op'] ?? '');
-    $ch = strtolower(trim((string)($in['channel'] ?? '')));
-    if (!preg_match('/^[a-z0-9_]{3,25}$/', $ch)) action_fail(400, 'A Twitch name is 3-25 letters, digits or _ (the part after twitch.tv/).');
+    $ch = trim((string)($in['channel'] ?? ''));
+    if ($op === 'add' && function_exists('platform_from_input')) {
+        // A Twitch name, or a Twitch / Kick / YouTube link, "kick:name" or "@youtubehandle".
+        $ch = platform_from_input($ch) ?? '';
+        if ($ch === '') action_fail(400, 'Type a Twitch name, or paste a link to the channel on Twitch, Kick or YouTube (for example kick.com/name or youtube.com/@name).');
+    } elseif ($op === 'add') {
+        $ch = strtolower($ch);
+        if (!preg_match('/^[a-z0-9_]{3,25}$/', $ch)) action_fail(400, 'A Twitch name is 3-25 letters, digits or _ (the part after twitch.tv/).');
+    }
+    if (!preg_match(STREAMER_KEY_RE, $ch)) action_fail(400, 'Unknown streamer.');
     $accounts = array_map(function ($f) { return substr(basename($f, '.enc'), 8); }, glob(REC_DIR . '/secret/youtube_*.enc') ?: []);
     $st = read_json(REC_DIR . "/recordings/$ch/state.json");
     $err = null;
@@ -1163,6 +1192,11 @@ if (isset($_GET['streamers'])) {
                     if (!in_array($in['pc_scan'], ['ask', 'off'], true)) { $err = 'Unknown setting.'; return; }
                     $c['pc_scan'] = $in['pc_scan'];
                 }
+                if (array_key_exists('storage', $in)) {
+                    $r = function_exists('storage_setting') ? storage_setting($in['storage']) : null;
+                    if ($r === null) { $err = 'Storage rule: days 0-3650 and number of recordings 0-1000 (0 = no limit).'; return; }
+                    if ($r['footage_days'] === 0 && $r['keep_last'] === 0) unset($c['storage']); else $c['storage'] = $r;
+                }
                 $c['changed'] = time();
                 $list[$ch] = $c;
             } elseif ($op === 'remove') {
@@ -1184,7 +1218,8 @@ if (isset($_GET['streamers'])) {
         'set' => isset($in['enabled']) ? ($in['enabled'] ? 'recording switched ON' : 'recording switched OFF')
             : (isset($in['youtube']) ? 'YouTube upload set to ' . ($in['youtube'] ?: 'none')
             : (isset($in['pc_scan']) ? 'PC scan after each stream: ' . ($in['pc_scan'] === 'ask' ? 'ask' : 'off')
-            : 'Twitch login set to ' . ($in['twitch_auth'] ?? '')))][$op];
+            : (isset($in['storage']) ? 'storage rule: ' . storage_text($in['storage'])
+            : 'Twitch login set to ' . ($in['twitch_auth'] ?? ''))))][$op];
     if (is_dir(REC_DIR . "/recordings/$ch")) {
         @file_put_contents(REC_DIR . "/recordings/$ch/recorder.log", '[' . date('Y-m-d H:i:s') . "] Dashboard: $what\n", FILE_APPEND | LOCK_EX);
     }
@@ -1221,7 +1256,7 @@ if (isset($_GET['moments'])) {
             'count' => (int)($in['count'] ?? 10), 'window' => (int)($in['window'] ?? 30),
             'label' => trim((string)($in['label'] ?? '')), 'title' => !empty($in['title']),
         ];
-        if ($r['channel'] !== '' && !preg_match('/^[a-z0-9_]{1,40}$/', $r['channel'])) action_fail(400, 'Unknown streamer.');
+        if ($r['channel'] !== '' && !preg_match(STREAMER_KEY_RE, $r['channel'])) action_fail(400, 'Unknown streamer.');
         if (!in_array($r['type'], MOMENT_TYPES, true)) action_fail(400, 'Unknown rule type.');
         if ($r['type'] !== 'burst' && $r['value'] === '') action_fail(400, 'Fill in what to look for.');
         if ($len($r['value']) > 100) action_fail(400, 'What to look for: at most 100 characters.');
@@ -1255,6 +1290,62 @@ if (isset($_GET['moments'])) {
         action_fail(400, 'Unknown action.');
     }
     echo json_encode(['ok' => true]);
+    exit;
+}
+
+// ---------------------------------------------------------------- text archive: delete the footage only, or keep it
+if (isset($_GET['footage'])) {
+    $in = check_action_request();
+    if (!function_exists('delete_footage')) action_fail(409, 'archive.php is missing in the recorder folder: upload it next to record.php.');
+    $op = (string)($in['op'] ?? '');
+    $d = recording_dir($in['channel'] ?? null, $in['folder'] ?? null);
+    if (!$d) action_fail(404, 'That recording no longer exists.');
+    $chanDir = dirname($d);
+    if ($op === 'keep') {
+        // Pinned: storage rules leave this recording's footage alone.
+        $mf = "$d/meta.json";
+        $m = read_json($mf);
+        if (!empty($in['keep'])) $m['keep_footage'] = true; else unset($m['keep_footage']);
+        file_put_contents("$mf.tmp", json_encode($m, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        rename("$mf.tmp", $mf);
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+    if ($op !== 'delete') action_fail(400, 'Unknown action.');
+    $st = read_json("$chanDir/state.json");
+    $convertQ = read_json(REC_DIR . '/recordings/.convert_queue.json');
+    $uploadQ = read_json(REC_DIR . '/recordings/.upload_queue.json');
+    $keys = array_unique([$d, REC_DIR . '/recordings/' . basename($chanDir) . '/' . basename($d)]);
+    foreach ($keys as $k) {
+        if ($busy = recording_busy($k, $st, $convertQ)) action_fail(409, "Can't delete the video now: $busy.");
+        if (isset($convertQ[$k])) action_fail(409, "Can't delete the video now: it is waiting for its MP4 conversion (cancel that first).");
+        if (isset($uploadQ[$k])) action_fail(409, "Can't delete the video now: it is waiting for its YouTube upload (cancel that first).");
+    }
+    if (is_file(REC_DIR . '/scan.php')) {
+        require_once REC_DIR . '/scan.php';
+        if (in_array(scan_load($d)['state'] ?? '', ['requested', 'preparing', 'ready', 'scanning'], true)) action_fail(409, "Can't delete the video now: a PC scan is running (cancel it first).");
+    }
+    $freed = delete_footage($d, 'deleted on the dashboard');
+    if ($freed === null) action_fail(500, 'Could not delete all video files in ' . basename($d) . '.');
+    @file_put_contents("$chanDir/recorder.log", sprintf("[%s] Video of %s deleted via the dashboard (%s freed) - chat, transcript and summary are kept\n",
+        date('Y-m-d H:i:s'), basename($d), size_text($freed)), FILE_APPEND | LOCK_EX);
+    echo json_encode(['ok' => true, 'freed' => $freed]);
+    exit;
+}
+
+// ---------------------------------------------------------------- can this server reach Kick and YouTube Live?
+if (isset($_GET['platformtest'])) {
+    $in = check_action_request();
+    if (!function_exists('platform_access_test')) action_fail(409, 'platforms.php is missing in the recorder folder: upload it next to record.php.');
+    $f = REC_DIR . '/recordings/.platform_test.json';
+    $old = read_json($f);
+    if (($in['op'] ?? '') === 'run') {
+        if (time() - (int)($old['checked'] ?? 0) < 20) action_fail(429, 'Tested a moment ago - wait a few seconds.');
+        @set_time_limit(60);
+        $old = ['checked' => time(), 'rows' => platform_access_test()];
+        @file_put_contents($f, json_encode($old));
+    }
+    echo json_encode(['ok' => true, 'test' => $old ?: null]);
     exit;
 }
 
@@ -1530,6 +1621,16 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   .switch.on i { left: 18px; background: var(--ok); }
   .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .b-idle { color: var(--ok); background: rgba(60,207,145,.12); }
+  .plat { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; letter-spacing: .3px; }
+  .plat-kick { color: #53fc18; background: rgba(83,252,24,.12); }
+  .plat-youtube { color: #ff5c5c; background: rgba(255,60,60,.13); }
+  .plat-test { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; margin-top: 6px; }
+  .plat-res { padding: 2px 8px; border-radius: 99px; font-weight: 600; cursor: help; }
+  .plat-res.ok { color: var(--ok); background: rgba(60,207,145,.12); }
+  .plat-res.bad { color: var(--bad, #ff6b6b); background: rgba(255,107,107,.12); }
+  .plat-res.warn { color: var(--warn, #f5b942); background: rgba(245,185,66,.12); }
+  .plat-detail { max-width: 760px; margin-top: 4px; }
+  .text-only { color: var(--warn, #f5b942); }
   .settings { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
   .settings select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 13px; margin-left: 4px; }
   .settings > .act, .settings > .rmconfirm { margin-left: auto; }
@@ -1657,11 +1758,12 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   <div class="streamers-head">
     <h2>Streamers</h2>
     <form id="addForm" autocomplete="off">
-      <input id="addName" placeholder="Twitch name (twitch.tv/…)" maxlength="40" spellcheck="false">
+      <input id="addName" placeholder="Twitch name, or a Kick / YouTube link" maxlength="120" spellcheck="false" title="A Twitch name, or a link: twitch.tv/name, kick.com/name, youtube.com/@name">
       <label class="chk"><input type="checkbox" id="addOn" checked> record right away</label>
       <button class="act add" type="submit">Add streamer</button>
       <span id="addErr" class="del-err"></span>
     </form>
+    <div id="platTest"></div>
   </div>
   <div id="channels"></div>
   <div id="momentsBox"></div>
@@ -2008,7 +2110,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   }
   $('#addForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const name = $('#addName').value.trim().replace(/^.*twitch\.tv\//i, '').replace(/[/?#].*$/, '').toLowerCase();
+    const name = $('#addName').value.trim(); // the server reads names and Twitch / Kick / YouTube links
     $('#addErr').textContent = '';
     if (!name) return;
     try {
@@ -2017,6 +2119,50 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
       await load();
     } catch (err) { $('#addErr').textContent = err.message; }
   });
+
+  // ---- Kick / YouTube Live: can this server reach them?
+  let platBusy = false, platErr = null;
+  function renderPlatTest(data) {
+    const box = $('#platTest'); box.replaceChildren();
+    if (!data.platforms_ready) return;
+    const t = data.platform_test;
+    const usesOther = data.channels.some(c => c.platform && c.platform.platform !== 'twitch');
+    const b = el('button', 'act', platBusy ? 'Testing…' : 'Test Kick / YouTube access');
+    b.disabled = platBusy;
+    b.title = 'Checks whether this server can reach Kick and YouTube Live (they sometimes refuse web servers)';
+    b.onclick = async () => {
+      platBusy = true; platErr = null; renderPlatTest(lastData);
+      try { const j = await post('?platformtest=1', { op: 'run' }); lastData.platform_test = j.test; }
+      catch (e) { platErr = e.message; }
+      platBusy = false; renderPlatTest(lastData);
+    };
+    const row = el('div', 'plat-test');
+    row.append(b);
+    if (t && t.rows) {
+      Object.entries(t.rows).forEach(([k, r]) => {
+        const it = el('span', 'plat-res ' + (r.ok === true ? 'ok' : r.ok === false ? 'bad' : 'warn'), (k === 'kick' ? 'Kick' : 'YouTube Live') + ': ' + (r.ok === true ? 'works' : r.ok === false ? 'blocked' : 'not sure'));
+        it.title = r.detail; row.append(it);
+      });
+      row.append(el('span', 'muted', 'tested ' + ago(t.checked, Math.max(data.now, t.checked))));
+    } else if (usesOther) row.append(el('span', 'muted', 'not tested yet'));
+    if (platErr) row.append(el('span', 'del-err', platErr));
+    box.append(row);
+    if (t && t.rows) {
+      const bad = Object.entries(t.rows).filter(([, r]) => r.ok !== true);
+      if (bad.length) { const d = el('div', 'rec-sub plat-detail'); bad.forEach(([, r]) => d.append(el('div', null, r.detail))); box.append(d); }
+    }
+  }
+  const STORAGE_PRESETS = [['0/0', 'Keep video forever'], ['7/0', 'Video: delete after 7 days'], ['30/0', 'Video: delete after 30 days'],
+    ['90/0', 'Video: delete after 90 days'], ['365/0', 'Video: delete after a year'], ['0/5', 'Video: keep the newest 5'],
+    ['0/10', 'Video: keep the newest 10'], ['0/25', 'Video: keep the newest 25']];
+  async function footageAction(c, r, body) {
+    const key = c.name + '/' + r.folder;
+    deleting = true; deleteError = null; render(lastData);
+    try { await post('?footage=1', Object.assign({ channel: c.name, folder: r.folder }, body)); if (body.op === 'delete') pendingDelete = null; }
+    catch (e) { deleteError = e.message; pendingDelete = key; }
+    deleting = false;
+    await load();
+  }
 
   // ---- PC scan
   const SCAN_ACTIVE = ['requested', 'preparing', 'ready', 'scanning'];
@@ -2357,6 +2503,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
     lastData = data;
     renderMoments(data);
     renderAi(data);
+    renderPlatTest(data);
     renderNotices(data);
     renderScanAsks(data);
     const now = data.now;
@@ -2375,7 +2522,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
 
     const strip = $('#strip'); strip.replaceChildren();
     const live = data.channels.filter(c => c.recording).length;
-    strip.append(tile('Recording now', live + ' of ' + data.channels.length, live ? data.channels.filter(c => c.recording).map(c => c.name).join(', ') : 'all channels offline', live ? 'live' : ''));
+    strip.append(tile('Recording now', live + ' of ' + data.channels.length, live ? data.channels.filter(c => c.recording).map(c => (c.platform && c.platform.platform !== 'twitch' ? c.platform.label + ' ' + c.platform.name : c.name)).join(', ') : 'all channels offline', live ? 'live' : ''));
     if (freshAlerts) strip.append(tile('Alerts', freshAlerts + ' new', (data.alerts[0] || {}).subject ? data.alerts[0].subject.replace(/^\[Recorder\]\s*/, '') : '', 'warn'));
     const ya = data.youtube_accounts;
     strip.append(tile('YouTube', ya.length ? ya.map(a => a.name).join(', ') : 'No accounts',
@@ -2425,10 +2572,12 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
         streamerAction(c.name, { op: 'set', enabled: !c.enabled });
       });
       head.append(sw);
-      head.append(el('h2', null, c.name));
+      const plat = c.platform || { platform: 'twitch', label: 'Twitch', name: c.name };
+      if (plat.platform !== 'twitch') head.append(el('span', 'plat plat-' + plat.platform, plat.label));
+      head.append(el('h2', null, plat.name));
       head.append(!c.enabled ? (c.wrapping_up ? el('span', 'badge b-warn', 'Stopping…') : el('span', 'badge b-off', 'Off'))
         : c.recording ? el('span', 'badge b-live', 'Recording')
-        : c.not_found ? el('span', 'badge b-warn', 'Not found on Twitch')
+        : c.not_found ? el('span', 'badge b-warn', 'Not found on ' + plat.label)
         : c.stale ? el('span', 'badge b-warn', 'No sign of life')
         : el('span', 'badge b-idle', 'Waiting for stream'));
       if (c.enabled || c.recording) head.append(el('span', 'updated', (c.recording ? 'last activity ' : 'last checked ') + ago(c.heartbeat, now)));
@@ -2470,7 +2619,16 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
       ps.title = 'Subtitles, translation and spoken-word moments, made on your PC. With "Ask me" a YouTube upload waits for your choice.';
       ps.onchange = () => streamerAction(c.name, { op: 'set', pc_scan: ps.value });
       pl.append(ps);
-      set.append(yl, tl, pl);
+      const sl = el('label', null, '');
+      const ss = el('select');
+      STORAGE_PRESETS.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; ss.append(o); });
+      const cur = c.storage ? (c.storage.footage_days || 0) + '/' + (c.storage.keep_last || 0) : '0/0';
+      if (!STORAGE_PRESETS.some(([v]) => v === cur)) { const o = el('option', null, 'Video: ' + (c.storage.footage_days ? c.storage.footage_days + ' days' : '') + (c.storage.footage_days && c.storage.keep_last ? ', ' : '') + (c.storage.keep_last ? 'newest ' + c.storage.keep_last : '')); o.value = cur; ss.append(o); }
+      ss.value = cur;
+      ss.title = 'Old video is deleted by itself; chat, transcript and summary always stay (and stay searchable). Recordings you mark "Keep video" are left alone.';
+      ss.onchange = () => { const [d, n] = ss.value.split('/').map(Number); streamerAction(c.name, { op: 'set', storage: { footage_days: d, keep_last: n } }); };
+      sl.append(ss);
+      if (plat.platform === 'twitch') set.append(yl, tl, pl, sl); else set.append(yl, pl, sl);
       if (c.listed) {
         if (pendingRemove === c.name) {
           const w = el('span', 'rmconfirm', 'Remove ' + c.name + ' from the list?' + (c.recording_count ? ' Its recordings stay (delete them below).' : ''));
@@ -2520,6 +2678,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
           const scanWait = r.scan && (r.scan.state === 'ask' || SCAN_ACTIVE.includes(r.scan.state)) && !r.upload.started;
           a.append(el('div', 'rec-sub', 'YouTube (' + r.upload.account + '): ' + (r.upload.started || r.upload.error ? pct + '%' : scanWait ? 'waits for the PC scan' : 'queued, starts at the next cron run when nothing is recording') + (r.upload.error ? ' · ' + r.upload.error : '')));
         }
+        if (r.text_only) a.append(el('div', 'rec-sub text-only', 'Text only: video deleted ' + (r.text_only.when || '').slice(0, 10) + (r.text_only.why && r.text_only.why.startsWith('storage rule') ? ' by the storage rule' : '') + ' · chat, transcript and summary kept'));
         if (r.scan) a.append(scanLine(c, r));
         if (r.ai && (r.ai.state !== 'done' || !r.ai.has_text)) a.append(aiLine(c, r));
         if (r.youtube) { const l = el('a', null, 'YouTube (' + r.youtube.privacy + ')'); l.href = r.youtube.url; l.target = '_blank'; l.rel = 'noopener noreferrer'; const d = el('div', 'rec-sub'); d.append(l); a.append(d); }
@@ -2569,6 +2728,12 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
             acts.append(sb);
           }
         }
+        if (c.storage && !r.text_only && r.status === 'done') {
+          const kb = el('button', 'act' + (r.keep_footage ? ' on' : ''), r.keep_footage ? 'Video kept' : 'Keep video');
+          kb.title = r.keep_footage ? 'The storage rule leaves this video alone - click to let it go like the others' : 'Keep this video, whatever the storage rule says';
+          kb.onclick = () => footageAction(c, r, { op: 'keep', keep: !r.keep_footage });
+          acts.append(kb);
+        }
         const del = el('button', 'act del', 'Delete');
         if (r.busy) { del.disabled = true; del.title = "Can't delete now: " + r.busy; }
         else del.onclick = () => { pendingDelete = key; deleteError = null; pendingYt = null; render(lastData); };
@@ -2594,8 +2759,17 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
         }
         if (pendingDelete === key) {
           const ctr = el('tr', 'confirm'); const td = el('td'); td.colSpan = 2;
-          td.append(el('span', null, 'Delete "' + (r.title || r.folder) + '" (' + mb(r.size) + ')? Video, chat and everything else in this folder will be gone for good. '));
-          const yes = el('button', 'act del sure', deleting ? 'Deleting…' : 'Yes, delete');
+          const hasVideo = !r.text_only && Object.keys(r.files).some(f => f.startsWith('video'));
+          td.append(el('span', null, hasVideo
+            ? 'Delete "' + (r.title || r.folder) + '"? "Video only" frees the space and keeps chat, transcript and summary (still searchable). "Everything" removes the whole folder for good. '
+            : 'Delete "' + (r.title || r.folder) + '" (' + mb(r.size) + ')? Chat, transcript, summary and everything else in this folder will be gone for good. '));
+          if (hasVideo) {
+            const vo = el('button', 'act del', deleting ? 'Deleting…' : 'Video only');
+            vo.disabled = deleting;
+            vo.onclick = () => footageAction(c, r, { op: 'delete' });
+            td.append(vo);
+          }
+          const yes = el('button', 'act del sure', deleting ? 'Deleting…' : hasVideo ? 'Everything' : 'Yes, delete');
           yes.disabled = deleting;
           yes.onclick = () => doDelete(c.name, r.folder);
           const no = el('button', 'act', 'Cancel');

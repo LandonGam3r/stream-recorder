@@ -67,8 +67,8 @@ const CHAT_HOST     = 'irc-ws.chat.twitch.tv'; // Twitch chat over WebSocket, po
 
 if (TIMEZONE !== '') date_default_timezone_set(TIMEZONE);
 
-// Proof of life: written before anything else can fail.
-@file_put_contents(
+// Proof of life: written before anything else can fail (not by the automated tests).
+if (!defined('RECORDER_TESTING')) @file_put_contents(
     __DIR__ . '/last_run.txt',
     date('Y-m-d H:i:s') . ' | PHP ' . PHP_VERSION . ' | SAPI ' . PHP_SAPI
     . ' | args: ' . json_encode($argv ?? ($_SERVER['argv'] ?? null))
@@ -87,6 +87,8 @@ if (!function_exists('curl_init')) {
 
 const CHANNELS_FILE = __DIR__ . '/channels.json'; // the streamer list, edited from the dashboard
 const MOMENTS_FILE  = __DIR__ . '/moments.json';  // YouTube "moments" rules, edited from the dashboard
+require_once __DIR__ . '/platforms.php'; // Twitch, Kick, YouTube Live: streamer keys and live checks
+require_once __DIR__ . '/archive.php';   // text archive (delete footage, keep text) and storage rules
 if (is_file(__DIR__ . '/moments.php')) require_once __DIR__ . '/moments.php';
 if (is_file(__DIR__ . '/scan.php')) require_once __DIR__ . '/scan.php';     // PC scan (subtitles, translation, spoken moments)
 if (is_file(__DIR__ . '/summary.php')) require_once __DIR__ . '/summary.php'; // AI summary of a stream
@@ -94,6 +96,9 @@ const IO_SAMPLE_INTERVAL = 5; // seconds between IO measurements for the dashboa
 
 $argvList = $argv ?? ($_SERVER['argv'] ?? []);
 $arg1     = (string)($argvList[1] ?? '');
+
+// The automated tests (tests/) load this file for its functions only.
+if (defined('RECORDER_TESTING')) return;
 
 @set_time_limit(0);
 ignore_user_abort(true);
@@ -107,12 +112,15 @@ if ($arg1 === '--io-sampler') {
     io_sampler_main();
     exit(0);
 }
-$channel = strtolower(preg_replace('/[^a-zA-Z0-9_]/', '', $arg1));
-$GLOBALS['channel'] = $channel;
-if ($channel === '') {
+if ($arg1 === '') {
     run_manager();
     exit(0);
 }
+$P = platform_parse($arg1); // "name" = Twitch, "kick-name", "youtube-handle"
+if (!$P) exit("Not a streamer name: $arg1\n");
+$channel = $P['key'];
+$GLOBALS['channel']  = $channel;
+$GLOBALS['platform'] = $P;
 $chanDir = RECORDINGS_DIR . '/' . $channel;
 @mkdir($chanDir, 0755, true);
 $GLOBALS['logFile']   = $chanDir . '/recorder.log';
@@ -174,7 +182,7 @@ if (!flock($lock, LOCK_EX | LOCK_NB)) {
     if (!$playlistUrl) {
         exit(0);
     }
-    if (RECORD_CHAT) {
+    if (RECORD_CHAT && $P['platform'] === 'twitch') {
         $chat = chat_connect($channel);
     }
 
@@ -227,21 +235,31 @@ if (!empty($state['run_active'])) {
 if (!$isSuccessor) {
     $info = get_stream_info($channel);
     if ($info === false) {
-        logmsg('Twitch API error while checking live status');
+        logmsg($P['label'] . ' API error while checking live status' . (!empty($GLOBALS['platformError']) ? ' (' . $GLOBALS['platformError'] . ')' : ''));
+        // Kick / YouTube refusing this server for 15 minutes in a row: say so once (they block some web servers).
+        if ($P['platform'] !== 'twitch') {
+            $state['platform_errors'] = ($state['platform_errors'] ?? 0) + 1;
+            if ($state['platform_errors'] === 15) {
+                alert("{$P['label']} refuses this server ({$P['name']})",
+                    "For 15 minutes the live check of '{$P['name']}' on {$P['label']} failed: " . ($GLOBALS['platformError'] ?? 'no answer') . ".\n\n"
+                    . "{$P['label']} sometimes refuses web servers. Click 'Test Kick / YouTube access' on the dashboard to see why and what you can do.\n", 'warning');
+            }
+            save_state($state);
+        }
         if ($prevKilledMsg) { logmsg($prevKilledMsg); $state['run_active'] = false; save_state($state); }
         exit(0);
     }
     if (!$info['exists']) {
         logmsg("Channel '$channel' does not exist");
         if (empty($state['not_found'])) {
-            alert("Streamer '$channel' does not exist on Twitch",
-                "The streamer list has '$channel', but Twitch has no channel with that name. Check the spelling on the dashboard (remove it and add the right name).\n");
+            alert("Streamer '{$P['name']}' does not exist on {$P['label']}",
+                "The streamer list has '{$P['name']}', but {$P['label']} has no channel with that name. Check the spelling on the dashboard (remove it and add the right name).\n");
             $state['not_found'] = true;
             save_state($state);
         }
         exit(0);
     }
-    if (!empty($state['not_found'])) { unset($state['not_found']); save_state($state); }
+    if (!empty($state['not_found']) || !empty($state['platform_errors'])) { unset($state['not_found'], $state['platform_errors']); save_state($state); }
 }
 $stream = $info['stream'];
 
@@ -380,7 +398,8 @@ $state['part'] = $state['part'] ?? count(glob("$recDir/parts/*.ts") ?: []);
 $video   = null;
 $newPart = ($state['session'] ?? null) !== $playlistUrl; // different session = possibly different timestamps
 $chatFile = RECORD_CHAT ? fopen($recDir . '/chat.txt', 'ab') : null;
-if (RECORD_CHAT && !$chat) {
+$chatSupported = $P['platform'] === 'twitch'; // Kick and YouTube chat: coming with their full support
+if (RECORD_CHAT && !$chat && $chatSupported) {
     $chat = chat_connect($channel);
 }
 $lastChatTry = time();
@@ -550,7 +569,7 @@ while (true) {
             $state['chat_lines'] += write_chat($chatFile, $new, $state);
         }
     } else {
-        if (RECORD_CHAT && time() - $lastChatTry >= 30) {
+        if (RECORD_CHAT && $chatSupported && time() - $lastChatTry >= 30) {
             $lastChatTry = time();
             $chat = chat_connect($channel);
         }
@@ -703,9 +722,11 @@ function gql(string $query, array $vars = [], bool $auth = false, int &$code = 0
     return $j['data'] ?? null;
 }
 
-/** @return array|false  false on API error */
+/** @return array|false  false on API error. Kick and YouTube: platforms.php, same shape. */
 function get_stream_info(string $login)
 {
+    $P = platform_parse($login);
+    if ($P && $P['platform'] !== 'twitch') return platform_stream_info($P);
     $d = gql(
         'query($login: String!) { user(login: $login) { displayName stream { id title createdAt game { name } } } }',
         ['login' => $login]
@@ -744,6 +765,7 @@ function twitch_auth_env(): string
 /** Could this channel's playback use the login token at all? */
 function use_twitch_auth(): bool
 {
+    if (($GLOBALS['platform']['platform'] ?? 'twitch') !== 'twitch') return false; // the Twitch login is for Twitch only
     return twitch_auth_mode() !== 'off' && oauth_token() !== '';
 }
 
@@ -839,6 +861,11 @@ function want_twitch_auth(): bool
  */
 function get_media_playlist_url(string $login, string &$chosen = '', bool $fresh = false): ?string
 {
+    $P = platform_parse($login);
+    if ($P && $P['platform'] !== 'twitch') {
+        $GLOBALS['adStatus'] = 'Viewer: anonymous (' . $P['label'] . ')';
+        return platform_playlist($P, $chosen, $fresh);
+    }
     $cacheFile = dirname($GLOBALS['stateFile']) . '/.playlist.json';
     if (!$fresh) {
         $c = json_decode((string)@file_get_contents($cacheFile), true) ?: [];
@@ -928,8 +955,10 @@ function pick_variant(string $m3u8, string &$chosen = ''): ?string
             preg_match('/BANDWIDTH=(\d+)/', $l, $b);
             preg_match('/VIDEO="([^"]+)"/', $l, $v);
             $group = $v[1] ?? '';
+            // Kick and YouTube may give only a resolution: name those "720p" and so on.
+            $res = preg_match('/RESOLUTION=\d+x(\d+)/', $l, $r) ? $r[1] . 'p' : '';
             $variants[] = [
-                'name'  => $names[$group] ?? $group,
+                'name'  => $names[$group] ?? ($group !== '' ? $group : $res),
                 'group' => $group,
                 'bw'    => (int)($b[1] ?? 0),
                 'url'   => trim($lines[$i + 1] ?? ''),
@@ -2233,6 +2262,7 @@ function write_meta(string $recDir, array $s, string $display, array $extra = []
     $old = file_exists($f) ? (json_decode((string)file_get_contents($f), true) ?: []) : [];
     $meta = array_merge($old, [
         'channel'        => $display,
+        'platform'       => platform_of(basename(dirname($recDir))),
         'title'          => $s['title'] ?? '',
         'game'           => $s['game'] ?? '',
         'stream_started' => isset($s['started_at']) ? date('Y-m-d H:i:s', strtotime($s['started_at'])) : null,
@@ -2383,7 +2413,7 @@ function run_manager(): void
         logmsg('Created channels.json - add streamers on the dashboard');
     }
     foreach (channels_load(true) as $ch => $c) {
-        if (!is_string($ch) || !preg_match('/^[a-z0-9_]{1,25}$/', $ch)) continue;
+        if (!is_string($ch) || (platform_parse($ch)['key'] ?? null) !== $ch) continue;
         $st = json_decode((string)@file_get_contents(RECORDINGS_DIR . "/$ch/state.json"), true) ?: [];
         // Switched on: record. Switched off with a recording still open: wrap it up.
         if (!empty($c['enabled']) || !empty($st['stream_id'])) spawn_php([$ch]);
@@ -2401,7 +2431,42 @@ function run_manager(): void
     if (function_exists('process_speech_lib')) process_speech_lib();
     if (function_exists('process_summaries')) process_summaries();
     process_uploads();
+    process_storage_rules();
     flock($lk, LOCK_UN);
+}
+
+/** Is a recording in use right now (recording, converting, uploading, scanning, being summarised)? */
+function recording_in_use(string $d): bool
+{
+    $ch = basename(dirname($d));
+    $st = json_decode((string)@file_get_contents(RECORDINGS_DIR . "/$ch/state.json"), true) ?: [];
+    if (!empty($st['stream_id']) && ($st['dir'] ?? '') === basename($d)) return true;
+    foreach (['.convert_queue.json', '.upload_queue.json'] as $q) {
+        $j = json_decode((string)@file_get_contents(RECORDINGS_DIR . "/$q"), true) ?: [];
+        if (isset($j[$d]) || isset($j[RECORDINGS_DIR . "/$ch/" . basename($d)])) return true;
+    }
+    if (function_exists('scan_load') && in_array(scan_load($d)['state'] ?? '', ['ask', 'requested', 'preparing', 'ready', 'scanning'], true)) return true;
+    if (function_exists('summary_load') && in_array(summary_load($d)['state'] ?? '', SUMMARY_ACTIVE, true)) return true;
+    return false;
+}
+
+/** Hourly in the manager: each streamer's storage rule deletes old footage (the text stays). */
+function process_storage_rules(): void
+{
+    $f = RECORDINGS_DIR . '/.storage_rules.json';
+    $last = (int)(json_decode((string)@file_get_contents($f), true)['checked'] ?? 0);
+    if (time() - $last < 3600) return;
+    @file_put_contents($f, json_encode(['checked' => time()]));
+    foreach (channels_load(true) as $ch => $c) {
+        if (!is_string($ch) || !is_array($c) || empty($c['storage']) || !preg_match(STREAMER_KEY_RE, $ch)) continue;
+        $chanDir = RECORDINGS_DIR . "/$ch";
+        foreach (storage_plan($chanDir, (array)$c['storage'], 'recording_in_use') as $d => $why) {
+            $freed = delete_footage($d, "storage rule: $why");
+            $line = $freed === null ? 'Storage rule: could not delete all footage of ' . basename($d)
+                : sprintf('Storage rule (%s): video of %s deleted, %s freed - chat, transcript and summary are kept', $why, basename($d), size_text($freed));
+            @file_put_contents("$chanDir/recorder.log", '[' . date('Y-m-d H:i:s') . "] $line\n", FILE_APPEND | LOCK_EX);
+        }
+    }
 }
 
 /** Once a minute in the manager: early disk warning, and a warning when this folder is reachable from the web. */
