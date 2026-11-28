@@ -256,6 +256,12 @@ function summary_start_frames(string $dir, array $meta): bool
     $len = (float)($meta['recorded_seconds'] ?? 0);
     if ($len <= 0) $len = media_duration($ff, $video);
     $times = summary_frame_times($len, $meta);
+    if (!$times) { // too short for pictures (an empty job would never report back)
+        summary_update($dir, function (array &$s) { $s['state'] = 'pictures'; $s['no_pictures'] = true; });
+        @mkdir("$dir/ai_frames", 0755, true);
+        file_put_contents("$dir/ai_frames/.exit", '0');
+        return false;
+    }
     $a = "$dir/ai_frames";
     if (is_dir($a)) foreach (glob("$a/{*,.*}", GLOB_BRACE) ?: [] as $f) if (is_file($f)) @unlink($f);
     @mkdir($a, 0755, true);
