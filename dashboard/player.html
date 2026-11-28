@@ -624,7 +624,7 @@
     }
     if (emoteMap) {
       const eb = doc.createElement('button'); eb.textContent = 'Emotes'; eb.className = 'emobtn' + (emotesOn ? ' on' : '');
-      eb.title = 'Show chat emotes as pictures (' + emoteMap.size + ' known for this recording; the pictures come from Twitch, BetterTTV, FrankerFaceZ or 7TV)';
+      eb.title = 'Show chat emotes as pictures (' + emoteMap.size + ' known for this recording). The pictures come from Twitch, BetterTTV, FrankerFaceZ, 7TV, Kick or YouTube, so those sites see your IP address.';
       eb.addEventListener('click', () => {
         emotesOn = !emotesOn;
         try { localStorage.setItem('stream-player-emotes', emotesOn ? '1' : '0'); } catch (e) {}
@@ -1289,8 +1289,8 @@
   // ------------------------------------------------------------ emotes as pictures
   // emotes.json (made by the recorder): Twitch emotes seen in chat (by id) and the channel's BetterTTV,
   // FrankerFaceZ and 7TV emotes (picture links). Only pictures from those sites are shown.
-  var emoteMap = null, emotesOn = true;
-  try { emotesOn = localStorage.getItem('stream-player-emotes') !== '0'; } catch (e) {}
+  var emoteMap = null, emotesOn = false; // off until switched on: the pictures come from other sites, which then see your IP address
+  try { emotesOn = localStorage.getItem('stream-player-emotes') === '1'; } catch (e) {}
   const EMOTE_OK = /^https:\/\/(static-cdn\.jtvnw\.net|cdn\.betterttv\.net|cdn\.frankerfacez\.com|cdn\.7tv\.app|files\.kick\.com|yt3\.ggpht\.com)\/[^\s"'<>]+$/;
   function setEmotes(text) {
     emoteMap = null;

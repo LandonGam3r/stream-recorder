@@ -697,31 +697,89 @@ function save_state(array $state): void
     rename($f . '.tmp', $f);
 }
 
+/**
+ * The server only fetches from the public internet: an address on this server or the local network (127.x,
+ * 10.x, 192.168.x, 169.254.x, ...) is refused, also after a redirect, so an odd answer from a platform can't
+ * make it reach your own admin pages. Returns a CURLOPT_RESOLVE entry that pins the checked address, or null.
+ * SR_TEST_BASE / SR_ALLOW_LOCAL (automated tests only) send requests to a local test server instead.
+ */
+function net_check(string &$url, ?string &$why = null): ?array
+{
+    $test = (string)getenv('SR_TEST_BASE');
+    $p = parse_url($url);
+    $host = strtolower((string)($p['host'] ?? ''));
+    if ($test !== '' && !in_array($host, ['localhost', '127.0.0.1'], true) && preg_match('#^https://[^/]+#', $url)) {
+        $url = rtrim($test, '/') . '/' . substr($url, 8); // https://host/path -> test server/host/path
+        $p = parse_url($url);
+        $host = strtolower((string)($p['host'] ?? ''));
+    }
+    if (($p['scheme'] ?? '') !== 'https' || $host === '' || isset($p['user'])) { $why = 'not an https address'; return null; }
+    if ($test !== '' || getenv('SR_ALLOW_LOCAL')) return [];
+    static $cache = [];
+    $port = (int)($p['port'] ?? 443);
+    $host = trim($host, '[]');
+    if (!isset($cache[$host])) {
+        $ips = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : (@gethostbynamel($host) ?: []);
+        $cache[$host] = $ips;
+    }
+    $ips = $cache[$host];
+    if (!$ips) { $why = "could not look up $host"; return null; }
+    foreach ($ips as $ip) {
+        $public = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false
+            && !(ip2long($ip) !== false && (ip2long($ip) & 0xFFC00000) === (ip2long('100.64.0.0') & 0xFFC00000)); // carrier-grade NAT
+        if (!$public) { $why = "$host points to a local address"; return null; }
+    }
+    return filter_var($host, FILTER_VALIDATE_IP) ? [] : ["$host:$port:" . $ips[0]];
+}
+
 function http_request(string $url, ?string $post, array $headers, int $timeout, int &$code = 0): ?string
 {
-    $ch = curl_init($url);
-    // Only https, and a request that carries a token never follows a redirect (to another site).
+    // Only https, a request that carries a token never follows a redirect (to another site), and every
+    // address (also each redirect) must be on the public internet. At most 128 MB per answer.
     $hasToken = (bool)preg_grep('/^Authorization:/i', $headers);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => !$hasToken,
-        CURLOPT_MAXREDIRS      => 3,
-        CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
-        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
-        CURLOPT_CONNECTTIMEOUT => 5,
-        CURLOPT_TIMEOUT        => $timeout,
-        CURLOPT_USERAGENT      => USER_AGENT,
-        CURLOPT_HTTPHEADER     => $headers,
-        CURLOPT_ENCODING       => '',
-    ]);
-    if ($post !== null) {
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+    for ($hop = 0; $hop <= 3; $hop++) {
+        $why = null;
+        $pin = net_check($url, $why);
+        if ($pin === null) { $code = 0; if (empty($GLOBALS['netRefusedLogged'][$why])) { $GLOBALS['netRefusedLogged'][$why] = 1; if (function_exists('logmsg') && !empty($GLOBALS['logFile'])) logmsg("Request refused: $why"); } return null; }
+        $ch = curl_init($url);
+        $body = '';
+        $tooBig = false;
+        $loc = null;
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_USERAGENT      => USER_AGENT,
+            CURLOPT_HTTPHEADER     => $headers,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_RESOLVE        => $pin,
+            CURLOPT_WRITEFUNCTION  => function ($ch, $d) use (&$body, &$tooBig) {
+                if (strlen($body) + strlen($d) > 128 * 1048576) { $tooBig = true; return 0; }
+                $body .= $d;
+                return strlen($d);
+            },
+            CURLOPT_HEADERFUNCTION => function ($ch, $h) use (&$loc) {
+                if (stripos($h, 'location:') === 0) $loc = trim(substr($h, 9));
+                return strlen($h);
+            },
+        ]);
+        if ($post !== null) {
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+        }
+        $ok = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($tooBig) { $code = 0; return null; }
+        if (in_array($code, [301, 302, 303, 307, 308], true) && $loc !== null && $post === null && !$hasToken) {
+            $url = preg_match('#^https?://#i', $loc) ? $loc : (preg_replace('#^(https://[^/]+).*$#', '$1', $url) . '/' . ltrim($loc, '/'));
+            continue;
+        }
+        return $ok === false ? null : $body;
     }
-    $body = curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    return $body === false ? null : $body;
+    return null;
 }
 
 function http_get(string $url, int $timeout, int &$code = 0): ?string
@@ -2027,6 +2085,8 @@ function youtube_access_token(string $acct, ?string &$err = null, bool $force = 
 function http_full(string $method, string $url, array $headers, ?string $body = null, int $timeout = 120): array
 {
     $resp = [];
+    $pin = net_check($url);
+    if ($pin === null) return [0, [], ''];
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_CUSTOMREQUEST  => $method,
@@ -2036,6 +2096,7 @@ function http_full(string $method, string $url, array $headers, ?string $body = 
         CURLOPT_CONNECTTIMEOUT => 10,
         CURLOPT_TIMEOUT        => $timeout,
         CURLOPT_HTTPHEADER     => $headers,
+        CURLOPT_RESOLVE        => $pin,
         CURLOPT_HEADERFUNCTION => function ($ch, $h) use (&$resp) {
             $p = strpos($h, ':');
             if ($p !== false) $resp[strtolower(trim(substr($h, 0, $p)))] = trim(substr($h, $p + 1));
@@ -2525,6 +2586,8 @@ function recording_in_use(string $d): bool
     }
     if (function_exists('scan_load') && in_array(scan_load($d)['state'] ?? '', ['ask', 'requested', 'preparing', 'ready', 'scanning'], true)) return true;
     if (function_exists('summary_load') && in_array(summary_load($d)['state'] ?? '', SUMMARY_ACTIVE, true)) return true;
+    foreach (json_decode((string)@file_get_contents("$d/clips.json"), true) ?: [] as $c) if (in_array($c['state'] ?? '', ['queued', 'cutting'], true)) return true;
+    if (function_exists('gaps_hold') && gaps_hold($d)) return true;
     return false;
 }
 

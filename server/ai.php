@@ -314,6 +314,7 @@ function process_clips(): void
             $log = trim((string)@file_get_contents("$dir/clips/{$e['id']}.log"));
             @unlink($exit);
             @unlink("$dir/clips/{$e['id']}.log");
+            if (!$ok) @unlink($out); // a half-written file is not a clip
             ai_update($cf, function (array &$l) use ($e, $ok, $log) {
                 foreach ($l as &$x) if ($x['id'] === $e['id']) { $x['state'] = $ok ? 'done' : 'failed'; $x['finished'] = time(); if (!$ok) $x['error'] = mb_substr($log ?: 'ffmpeg stopped', -300); }
             });
@@ -329,6 +330,7 @@ function process_clips(): void
         }
     }
     if (!$ff || !exec_available() || any_channel_recording()) return;
+    if (function_exists('disk_low') && disk_low()[1]) return; // no room: wait (recordings come first)
     foreach ($files as $cf) {
         $dir = dirname($cf);
         foreach (ai_read($cf) as $e) {

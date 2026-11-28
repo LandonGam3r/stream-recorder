@@ -105,6 +105,8 @@
   // ---- data
   const get = async u => { if (!u) return null; const r = await fetch(u, { credentials: 'same-origin' }); return r.ok ? r.text() : null; };
   let chat = [], speech = [], summary = '', viewers = [], emotes = null, events = [], checkins = [];
+  let emotesOn = false; // same switch as in the player; off until you turn it on (other sites then see your IP address)
+  try { emotesOn = localStorage.getItem('stream-player-emotes') === '1'; } catch (e) {}
   const EMOTE_OK = /^https:\/\/(static-cdn\.jtvnw\.net|cdn\.betterttv\.net|cdn\.frankerfacez\.com|cdn\.7tv\.app|files\.kick\.com|yt3\.ggpht\.com)\/[^\s"'<>]+$/;
 
   function mapper() {
@@ -159,9 +161,10 @@
 
   // ---- text with search marks and emotes (always as text nodes, never HTML)
   function addText(parent, text, q) {
-    const parts = emotes ? text.split(/(\s+)/) : [text];
+    const on = emotes && emotesOn;
+    const parts = on ? text.split(/(\s+)/) : [text];
     for (const p of parts) {
-      const u = emotes && emotes.get(p);
+      const u = on && emotes.get(p);
       if (u && (!q || !p.toLowerCase().includes(q.toLowerCase()))) { const i = el('img', 'emote'); i.alt = p; i.title = p; i.loading = 'lazy'; i.referrerPolicy = 'no-referrer'; i.src = u; parent.append(i); continue; }
       if (!q) { parent.append(p); continue; }
       const lo = p.toLowerCase(), ql = q.toLowerCase();
@@ -368,6 +371,10 @@
     inp.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(() => { q = inp.value.trim(); hl = ''; windowAt = 0; render(); }, 150); });
     tabs.append(inp, el('span', 'count'));
     tabs.lastChild.id = 'count';
+    const eb = el('button', null, 'Emotes'); eb.id = 'emoBtn'; eb.style.display = 'none';
+    eb.title = 'Show chat emotes as pictures. They come from Twitch, BetterTTV, FrankerFaceZ, 7TV, Kick or YouTube, so those sites see your IP address.';
+    eb.onclick = () => { emotesOn = !emotesOn; try { localStorage.setItem('stream-player-emotes', emotesOn ? '1' : '0'); } catch (e) {} eb.classList.toggle('on', emotesOn); render(); };
+    tabs.append(eb);
   }
 
   (async function init() {
@@ -393,6 +400,7 @@
       } catch (e) {}
     }
     events = buildEvents();
+    if (emotes) { const eb = $('emoBtn'); eb.style.display = ''; eb.classList.toggle('on', emotesOn); }
     // Opened from a search result: ...#tab=chat&t=123&q=word
     const hp = new URLSearchParams(location.hash.slice(1));
     tab = hp.get('tab') || (summary ? 'summary' : speech.length ? 'speech' : 'chat');

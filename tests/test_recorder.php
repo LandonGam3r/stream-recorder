@@ -14,3 +14,11 @@ same($m['text'] ?? null, 'evil: x', 'odd display name falls back to the login');
 same(format_chat_line(':tmi.twitch.tv 001 justinfan :Welcome'), null, 'server lines are skipped');
 
 same(clean_text("a\x07b\r\nc \u{202E}d"), 'ab c d', 'control and direction characters removed');
+
+// The server only fetches from the public internet (no local or private addresses, https only).
+foreach (['https://127.0.0.1/x', 'https://10.1.2.3/', 'https://192.168.1.1:2083/', 'https://169.254.169.254/latest/meta-data', 'https://[::1]/', 'https://100.64.1.1/', 'https://0.0.0.0/'] as $u) {
+    $x = $u; same(net_check($x), null, "refused: $u");
+}
+$x = 'http://8.8.8.8/'; same(net_check($x), null, 'plain http refused');
+$x = 'https://user@8.8.8.8/'; same(net_check($x), null, 'user@ refused');
+$x = 'https://8.8.8.8/x'; same(net_check($x), [], 'a public address is fine');

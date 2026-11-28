@@ -43,6 +43,8 @@ jobs:
           echo "record.php $r, dashboard $d"; test -n "$r" && test "$r" = "$d"
       - name: Automated tests (server)
         run: php tests/run.php
+      - name: Dashboard over HTTP (login, tokens, other sites, odd names)
+        run: php tests/http_test.php
       - name: Automated tests (PC summary tool)
         run: python3 -m unittest discover -s tests -p "test_*.py"
       - name: JavaScript syntax

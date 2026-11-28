@@ -146,6 +146,7 @@ function gaps_work(string $dir, array $g, float $deadline): void
     $segs = gaps_vod_segments((string)$g['vod']['id'], (string)($meta['quality'] ?? ''));
     if ($segs === null) { $end('skipped', 'could not open the VOD (subscribers only?) - the holes stay'); return; }
     $vodLen = $segs ? end($segs)['to'] : 0;
+    if (function_exists('disk_low') && disk_low()[1]) { $g['note'] = 'waiting for free disk space'; gaps_save($dir, $g); return; }
     // 3. Fill the holes one by one.
     @mkdir("$dir/gapwork", 0755, true);
     foreach ($g['holes'] as $k => &$h) {

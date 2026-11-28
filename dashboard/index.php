@@ -621,6 +621,7 @@ function storage_text($r): string
 /** Why this recording can't be deleted right now, or null. */
 function recording_busy(string $d, array $st, array $convertQ): ?string
 {
+    foreach (is_file("$d/clips.json") ? read_json("$d/clips.json") : [] as $c) if (($c['state'] ?? '') === 'cutting') return 'a clip is being cut from it right now';
     if (!empty($st['stream_id']) && ($st['dir'] ?? '') === basename($d)) return 'this stream is still being recorded (or being wrapped up)';
     if (!empty($convertQ[$d]['started'])) return 'it is being converted right now';
     return null;
@@ -1413,7 +1414,8 @@ if (isset($_GET['aiextra'])) {
     if ($op === 'clip') {
         $kind = ($in['kind'] ?? '') === 'short' ? 'short' : 'clip';
         $acct = (string)($in['upload'] ?? '');
-        if ($acct !== '' && !is_file(REC_DIR . "/secret/youtube_$acct.enc")) action_fail(400, "No YouTube account named '$acct' is set up.");
+        $accounts = array_map(function ($f) { return substr(basename($f, '.enc'), 8); }, glob(REC_DIR . '/secret/youtube_*.enc') ?: []);
+        if ($acct !== '' && !in_array($acct, $accounts, true)) action_fail(400, 'No YouTube account with that name is set up.');
         $err = clip_request($d, (int)($in['index'] ?? -1), $kind, $acct);
         if ($err !== null) action_fail(409, $err);
         $chanLog(($kind === 'short' ? 'Short' : 'Clip') . ' requested via the dashboard: ' . basename($d) . ($acct !== '' ? " (then to YouTube: $acct)" : '') . ' - cut by the next cron runs when nothing is recording');
