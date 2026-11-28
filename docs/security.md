@@ -44,6 +44,8 @@ To report a problem, see [SECURITY.md](../SECURITY.md).
 **Downloads by the server**
 - **https only:** never other kinds of addresses (such as `file://`).
 - **No redirects with tokens:** requests that carry your Twitch or Google token never follow a redirect, so a token can't be passed to another site.
+- **Never your own network:** addresses that come from outside (Kick and YouTube video links, emote pictures, redirects) are checked before every request and after every redirect: names that point to a private, local or carrier-internal address are refused, and the checked address is the one connected to, so a name can't change in between. A download is capped at 128 MB.
+- **Emote pictures** load in your browser straight from the emote services (Twitch, Kick, YouTube, 7TV, BTTV, FFZ), only when you switch emotes on in the player or text view. Those services then see your IP address, like on the streaming site itself; that's why they're off by default. The page only allows pictures from that fixed list.
 
 **YouTube**
 - **Public description:** title, categories, date, length and moments only. The internal summary (server folder, cron runs, gaps) stays in the recording folder.
@@ -90,8 +92,14 @@ To report a problem, see [SECURITY.md](../SECURITY.md).
 - **The API key** is entered on the dashboard, but the dashboard can't encrypt it (it doesn't have `REC_KEY`). It's left in `secret/anthropic_setup.txt` (not reachable from the web) until the next cron run encrypts it and overwrites and deletes the plain copy, within a minute.
 - **Requests to Anthropic** use https only and never follow redirects, so the key can't be sent anywhere else.
 - **Chat as instructions:** chat (and titles) could contain text meant to steer the AI. The material is marked as material, and the instructions say never to follow anything in it.
-- **The summary on the dashboard** is built as plain text elements, never as HTML: a summary can't run scripts or add links. Only its times become links to the player.
+- **The summary on the dashboard** is built as plain text elements, never as HTML: a summary can't run scripts or add links. Only its times become links to the player. The same goes for answers, check-ins, digests, chapter and clip titles: they're cleaned of tags and links before they're stored.
+- **Clips and thumbnails** are made by ffmpeg and PHP on your server from times and words Claude picked; those are checked (numbers within the recording, short plain text) and never reach a shell command.
+- **Uploads of clips** only go to YouTube accounts you set up.
 - **What is sent** to Anthropic: see [docs/ai-summary.md](ai-summary.md#privacy).
+
+## Update check
+
+Once a day the dashboard asks GitHub's public API for the newest release of the project (`UPDATE_CHECK`, can be switched off). That request carries no information about you or your setup beyond what any web request does (your server's address). There is no other contact with the project and no usage counting.
 
 ## Things to keep up to date
 

@@ -23,7 +23,7 @@ Start with the dashboard: the **Cron** chip, the **Alerts**, and each streamer's
 **"Recorder folder not found" on the dashboard**
 - Set `RECORDER_DIR` in `dashboard/config.php` to the folder containing `record.php`.
 
-**Streamer shows "Not found on Twitch"**
+**Streamer shows "Not found"**
 - Check the spelling: it's the part after `twitch.tv/`. Remove the streamer and add the right name.
 
 **Log signals**
@@ -58,3 +58,9 @@ Start with the dashboard: the **Cron** chip, the **Alerts**, and each streamer's
 
 **Twitch changed something**
 - The recorder uses the same internal requests as Twitch's web player. If Twitch changes those, recording stops with errors in the log, and the code needs an update.
+
+**Kick or YouTube don't record from the server**
+- Press **Test Kick / YouTube access** on the dashboard. *Blocked* or *not sure* means the site refuses or questions your server (Kick's Cloudflare, YouTube's bot check), common for data-centre addresses. Recording that channel from your own computer usually works. See [platforms.md](platforms.md).
+
+**Something else is off**
+- **Setup check** in the dashboard's header lists what the cron job's PHP can do and what's missing, with what to do about it.

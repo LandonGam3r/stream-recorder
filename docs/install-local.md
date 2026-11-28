@@ -6,8 +6,11 @@ Runs on Linux, macOS, or Windows 10/11 through WSL (Windows Subsystem for Linux)
 
 | | Debian/Ubuntu/WSL | macOS (Homebrew) |
 |---|---|---|
-| PHP 8.0+ with curl | `sudo apt install php-cli php-curl` | `brew install php` |
+| PHP 8.0+ with curl | `sudo apt install php-cli php-curl php-mbstring` | `brew install php` |
+| GD (text on AI thumbnails, optional) | `sudo apt install php-gd` | included |
 | ffmpeg (for MP4, optional) | `sudo apt install ffmpeg` | `brew install ffmpeg` |
+
+Prefer Docker? Everything runs in one container instead, with ffmpeg included: see [docker/README.md](../docker/README.md).
 
 ## Start
 

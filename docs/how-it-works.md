@@ -6,9 +6,11 @@ flowchart LR
     mgr -->|"one run per<br/>switched-on streamer"| run["record.php &lt;streamer&gt;<br/>(recording run)"]
     mgr --> io["IO sampler"]
     mgr --> conv["conversions &amp;<br/>YouTube uploads"]
-    run <-->|"video + chat"| twitch[(Twitch)]
+    run <-->|"video + chat"| twitch[(Twitch / Kick /<br/>YouTube)]
     run --> files[("recordings/")]
     conv -->|"ffmpeg, detached"| files
+    mgr --> gaps["gap repair<br/>(Twitch VOD)"] --> files
+    mgr --> ai["AI jobs<br/>(Claude)"] --> files
     conv --> yt[(YouTube)]
     dash["dashboard<br/>index.php"] -->|"reads"| files
     dash -->|"channels.json"| mgr
@@ -17,11 +19,13 @@ flowchart LR
 
 ## The pieces
 
-- **`server/record.php`**: everything server-side, in one file.
+- **`server/record.php`**: the recorder, with its helpers next to it:
+  - `platforms.php` (Kick and YouTube: live check, video, chat), `streamdata.php` (viewers, emotes, bookmarks, search), `archive.php` (storage rules), `gaps.php` (gap repair), `moments.php`, `scan.php`, `summary.php` and `ai.php` (summary extras, clips, questions, check-ins, digest).
   - **Manager** (started every minute without arguments): reads the streamer list, starts a recording run for each switched-on streamer, and does the background work (token check, conversions, uploads, IO sampling). Each piece runs as its own short process.
   - **Recording run** (`record.php <streamer>`): checks whether the streamer is live and records video and chat.
 - **`dashboard/index.php`**: the web interface, plus a small JSON API used by the page itself. It never talks to Twitch; it reads the recorder's files and writes only `channels.json` and deletions.
 - **`dashboard/scan.html`** and **`pc-tools/scan/scan.html`**: the same PC scan page; it runs speech recognition and translation in your browser. From the dashboard it gets the sound from the server; opened from disk it reads a recording folder on your PC ([pc-scan.md](pc-scan.md)).
+- **`dashboard/text.html`**: the text view of a recording (summary, spoken words, chat, moments, Ask Claude).
 - **`dashboard/player.html`** and **`pc-tools/player/player.html`**: the same player file, served by the dashboard or opened from disk.
 
 ## Recording in relays
@@ -49,6 +53,17 @@ The playback session is reused between runs (~20 min), so to Twitch it looks lik
 - **What's logged:** messages, subscriptions, raids, timeouts and bans, as `[time] user: message` in `chat.txt`, de-duplicated by message id.
 - **Sync info:** at the end of the stream the sync info is written into the first line of `chat.txt` (`#META {...}`), so `video.mp4` + `chat.txt` alone are enough to play it back anywhere.
 
+## Gap repair
+
+A live recording can have holes: an ad break shown to you (without the ad-free token), a piece the server missed while busy, or a start a little after the stream began. Twitch keeps the whole stream as a VOD, so after the stream ends the recorder fills those holes from it (`GAP_REPAIR`, Twitch only):
+
+1. **Find:** holes of 4 seconds or more come from `meta.json` → `timeline` (each part's wall-clock start and length), plus up to 10 minutes missed at the start.
+2. **Wait for the VOD:** up to an hour for Twitch to publish it. Streamers who don't keep VODs, or delete them, just get no repair.
+3. **Fill:** the matching VOD segments are saved as `parts/NNN_fill.ts`, right after the part before the hole, so the conversion joins everything in order. Chat times and moments after a fill are shifted to match.
+4. **Convert** as usual. The MP4 conversion waits while a repair runs (at most 6 hours, then it goes ahead without).
+
+The recording's line on the dashboard says how many holes were filled and how much time was added.
+
 ## Conversion
 
 - **Method:** ffmpeg's concat demuxer joins the parts end to end with `-c copy`: lossless, no re-encoding.
@@ -65,6 +80,7 @@ server/
   moments.php                YouTube moments scanner (used by record.php and the dashboard)
   scan.php                   PC scan: prepares the sound, holds uploads, writes subtitles
   summary.php                AI summary: pictures, sends to Claude (Message Batches), fetches the result
+  platforms.php, streamdata.php, archive.php, gaps.php, ai.php   see "The pieces"
   summary_settings.json      AI summary settings (the dashboard edits them)
   channels.json              streamer list (the dashboard edits it)
   moments.json               YouTube moments rules (the dashboard edits them)
@@ -73,6 +89,7 @@ server/
     .notifications.json      alerts
     .io_history.json         IO graph data (24 h, per minute)
     .convert_queue.json, .upload_queue.json, .system.log, .settings.json
+    .digests/                weekly digests
     <streamer>/
       recorder.log (+ recorder.log.1 after rotation), state.json
       2026-11-17_150000_<streamid>/
@@ -82,6 +99,9 @@ server/
         summary.txt          end-of-stream summary
         scan.json            PC-scan state (only when asked or scanned)
         ai_summary.md, ai_summary.json   AI summary and its state/cost (ai_frames/ while it's made)
+        viewers.txt          viewer count per minute; emotes.json: emote pictures seen in chat
+        bookmarks.json       your bookmarks
+        ai_extras.json, thumbnail.jpg, clips.json, clips/, ai_ask.json, checkins.json   AI extras
         transcript.json      what was said, with times and translation (PC scan)
         subtitles.vtt, subtitles.<lang>.vtt, chat_translation.<lang>.json
         audio/partNNN.ogg    sound pieces for a running PC scan (deleted when done)

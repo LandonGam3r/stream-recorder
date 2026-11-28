@@ -27,6 +27,10 @@ Extras:
 - A−/A+ in the pop-up changes the text size.
 - Keys: Space/K = play/pause, ←/→ = 5 s, M = mute, F = fullscreen (or double-click), C = pop out/dock chat.
 - After a PC scan: a subtitles menu next to the speed control, and a **Translated** button in the chat bar.
+- **Moments** (★ or B): raids, gift subs, chat bursts, title changes and your bookmarks in one list. Bookmarks made here are kept in this browser.
+- **Chat on the video:** off, in full screen only, or always; drag and resize it where you want it.
+- The strip above the seek bar shows how busy chat was (and viewers, when the folder has the `viewers.txt` of a 2.0 recording).
+- **Emotes** (⚙ in the chat bar) shows emote pictures instead of names; off by default because they load from the emote services.
 
 Nothing is uploaded anywhere - the files are only read by your browser. `.ts` files can't play in browsers; recordings converted by the server are `.mp4`.
 

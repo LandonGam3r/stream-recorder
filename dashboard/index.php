@@ -1823,7 +1823,7 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   .setup .sicon { font-weight: 700; width: 18px; text-align: center; flex: none; }
   .setup .sicon.ok { color: var(--ok); } .setup .sicon.bad { color: var(--bad); } .setup .sicon.opt { color: var(--muted); }
   .setup .cronline { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
-  .checkin { flex-basis: 100%; font-size: 13px; color: var(--text); background: rgba(155,135,255,.08); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px; margin-top: 6px; }
+  .checkin { grid-column: 1 / -1; font-size: 13px; color: var(--text); background: rgba(155,135,255,.08); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px; margin-top: 6px; }
   .checkin b { color: #b3a8ff; font-weight: 600; }
   .aistatus { font-size: 13px; }
   .aistatus.ok { color: var(--ok); } .aistatus.warn { color: var(--warn); } .aistatus.bad { color: var(--bad); }
@@ -2034,7 +2034,8 @@ ob_start('with_nonce'); // every <script> of the page below gets this load's non
   table { width: 100%; border-collapse: collapse; }
   td { padding: 7px 0; border-top: 1px solid var(--line); vertical-align: top; }
   tr:first-child td { border-top: 0; }
-  td.r { text-align: right; white-space: nowrap; padding-left: 10px; }
+  td.r { text-align: right; padding-left: 10px; width: 300px; }
+  td.r .acts { flex-wrap: wrap; }
   /* Phones: a recording's status and buttons go under its title instead of squeezing it. */
   @media (max-width: 640px) {
     .rectable tr:not(.confirm) td { display: block; }

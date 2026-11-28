@@ -2,6 +2,42 @@
 
 All notable changes to Stream Recorder™. Dates are release dates; versions follow [semantic versioning](https://semver.org/).
 
+## [2.0.0] - 2026-11-28
+
+The biggest update so far: more platforms, everything searchable, and much more from the AI summary. Updating from 1.x: upload both folders as usual; the new files are listed in [install-webserver.md](docs/install-webserver.md#updating). Your streamers, recordings, settings and keys stay as they are.
+
+### Added
+- **Kick and YouTube Live.** Paste a `kick.com/…` or `youtube.com/@…` link to add a streamer. Video and chat (with subs, raids, Super Chats and memberships) are recorded, and everything after works the same as for Twitch. **Test Kick / YouTube access** checks whether your server can reach them ([platforms.md](docs/platforms.md)).
+- **Gap repair.** Holes in a Twitch recording (ad breaks you were shown, missed pieces, a late start of up to 10 minutes) are filled from the stream's VOD before the MP4 is made (`GAP_REPAIR`).
+- **Search all recordings.** Chat, spoken words, summaries, titles and bookmarks of every recording at once, by text or by user, with the lines around each hit and a link to the moment.
+- **Text view.** A readable page per recording with the summary, spoken words, chat and moments, an activity graph and search within; it opens instantly, also for long streams.
+- **Player:**
+  - an activity strip with chat activity, viewers and moment dots above the seek bar;
+  - a **Moments** list (★ or B) with title changes, raids, gift subs, chat bursts, the most viewers, what your YouTube moments rules found, and your bookmarks;
+  - **bookmarks** with a note, saved on the server, shown on every device and found by search;
+  - **chat on the video**, off / full screen only / always, which you can drag and resize;
+  - optional **emote pictures** from Twitch, Kick, YouTube, 7TV, BTTV and FFZ (off by default).
+- **Viewer counts** every minute while recording (`viewers.txt`).
+- **Storage rules per streamer:** delete old video after a number of days, or keep only the newest few. Chat, spoken words and the summary stay, so old streams remain readable and searchable. **Keep video** protects a recording; **Video only** deletes just the video by hand.
+- **AI extras with Claude** (switch them on on the AI card):
+  - **YouTube chapters** from the summary at the top of the description; the upload waits for the summary (at most 2 hours).
+  - **Thumbnail:** Claude picks the best picture and a few words, the server puts the words on it and sets it on YouTube.
+  - **Clips:** the best 15–60 second moments listed under the summary. Cut them on the server, or as vertical **Shorts**, and upload them to YouTube.
+  - **Ask Claude** about a stream in its text view.
+  - **Live check-ins:** every 30 minutes a few sentences on a live stream, from the chat.
+  - **Weekly digest** of last week's streams, every Monday.
+- **Setup check** in the header: PHP, cron, `exec()`, ffmpeg, GD and font, `REC_KEY`, HTTPS and the optional parts, with the exact cron line for your folders.
+- **First-run page:** before the recorder has run, the dashboard shows the cron line to add, with a new random `REC_KEY` made in your browser.
+- **Update notice:** once a day the dashboard asks GitHub whether a newer release is out (`UPDATE_CHECK`), and warns when the dashboard and recorder folders are at different versions.
+- **Docker:** an optional container with the recorder, the dashboard, ffmpeg and fonts ([docker/README.md](docker/README.md)).
+- **Tests:** automated checks of the server code, the dashboard's pages and the PC summary tool run on every change.
+
+### Changed
+- The recorder is split into a few files next to `record.php` (`platforms.php`, `archive.php`, `streamdata.php`, `gaps.php`, `ai.php`); upload them all.
+- A summary that ends up without pictures (a very short stream) no longer waits forever.
+- A recording can't be deleted while a clip is being cut or a gap repair runs.
+- Requests to addresses that come from outside (video links, emote pictures, redirects) are checked so they can never reach your own server or home network, and are capped at 128 MB.
+
 ## [1.8.6] - 2026-11-27
 
 ### Fixed
@@ -295,6 +331,7 @@ First public release.
 - **PC tools:** a stand-alone player and a YouTube folder uploader.
 - **Documentation** for web servers and local installs, configuration, security and troubleshooting.
 
+[2.0.0]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.6...v2.0.0
 [1.8.6]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.5...v1.8.6
 [1.8.5]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.4...v1.8.5
 [1.8.4]: https://github.com/LandonGam3r/stream-recorder/compare/v1.8.3...v1.8.4

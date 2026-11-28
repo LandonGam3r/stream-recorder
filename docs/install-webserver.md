@@ -7,7 +7,7 @@ The examples use cPanel and the home folder `/home/you/`. Replace `you` with you
 ## 1. The recorder
 
 1. In the **File Manager**, create a folder `twitch-recorder` in your **home folder**: next to `public_html`, **not inside it**, so recordings and secrets can never be downloaded from the web.
-2. Upload the contents of `server/` into it: `record.php`, `moments.php`, `scan.php` and `config.example.php`.
+2. Upload every `.php` file of `server/` into it: `record.php`, `platforms.php`, `archive.php`, `streamdata.php`, `gaps.php`, `moments.php`, `scan.php`, `summary.php`, `ai.php` and `config.example.php`.
 3. Optional: copy `config.example.php` to `config.php` and change settings. Every setting is explained in the file and in [configuration.md](configuration.md). Common ones:
    - `QUALITY`: `best` ≈ 2.8 GB per hour at 1080p60, `480p30` ≈ 0.6 GB per hour.
    - `TIMEZONE`: e.g. `'Europe/Amsterdam'`.
@@ -31,6 +31,8 @@ REC_KEY=YourLongPassphrase123 /usr/bin/php -q /home/you/twitch-recorder/record.p
 
 Within a minute, `twitch-recorder/` contains `recordings/`, `secret/` (with your dashboard key) and `channels.json`.
 
+Not sure about the PHP path or the passphrase? Do step 4 first: until the recorder has run once, the dashboard shows a page with the exact cron line for your folders and a new random `REC_KEY` made in your browser. Later, **Setup check** in the dashboard's header shows what the cron job's PHP has and whether everything works.
+
 ## 3. ffmpeg (for MP4)
 
 Each recording's first log lines say `MP4 conversion: ffmpeg found at …` or `NOT available - <reason>`.
@@ -48,7 +50,7 @@ If your host has no ffmpeg:
 ## 4. The dashboard
 
 1. Create a folder in `public_html` with a name that's hard to guess, e.g. `rec-7f3k9q`.
-2. Upload `dashboard/index.php`, `dashboard/player.html` and `dashboard/scan.html` into it.
+2. Upload `dashboard/index.php`, `dashboard/player.html`, `dashboard/scan.html` and `dashboard/text.html` into it.
 3. Open `https://your-site/rec-7f3k9q/`.
    - The dashboard finds the recorder by itself when it's at `/home/you/twitch-recorder` (two levels up from the dashboard folder).
    - Elsewhere: copy `config.example.php` to `config.php` next to `index.php` and set `RECORDER_DIR`.
@@ -56,13 +58,15 @@ If your host has no ffmpeg:
 
 ## 5. Add streamers
 
-On the dashboard: type a Twitch name (or paste a twitch.tv link), tick *record right away*, click **Add streamer**. Done. See [dashboard.md](dashboard.md).
+On the dashboard: type a Twitch name, or paste a link to the channel on Twitch, Kick or YouTube (`twitch.tv/name`, `kick.com/name`, `youtube.com/@name`), tick *record right away* and click **Add streamer**. Done. See [dashboard.md](dashboard.md) and, for Kick and YouTube, [platforms.md](platforms.md).
 
 Optional extras: [ad-free recording with your Twitch login](twitch-token.md) and [YouTube upload](youtube.md).
 
 ## Updating
 
-Replace `record.php`, `moments.php`, `scan.php`, `index.php`, `player.html` and `scan.html` with the new versions (see [CHANGELOG.md](../CHANGELOG.md) for what changed). Your settings (`config.php`), streamers, recordings and keys are untouched. It's safe while recording: the next run uses the new file.
+Upload all `.php` files of the new `server/` folder and all files of the new `dashboard/` folder over the old ones (see [CHANGELOG.md](../CHANGELOG.md) for what changed). Your settings (`config.php`), streamers, recordings and keys are untouched. It's safe while recording: the next run uses the new files. The dashboard says so when the two folders are at different versions, and once a day it checks GitHub for a newer release.
+
+**From 1.x to 2.0:** upload both folders as above; the new files (`platforms.php`, `archive.php`, `streamdata.php`, `gaps.php`, `ai.php`, `text.html`) are needed. Nothing else changes: Twitch streamers keep their names and folders, and old recordings work in the player, the text view and search.
 
 ## Stopping
 

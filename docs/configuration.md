@@ -2,7 +2,7 @@
 
 Everything works without configuration. To change a setting, copy the example file to `config.php` in the same folder and edit it; anything you leave out keeps its default. `config.php` is never part of an update, so your settings survive.
 
-Streamers and their per-streamer settings (on/off, YouTube account, Twitch login) are **not** in a config file: you manage them on the dashboard, which stores them in `server/channels.json`. The same goes for YouTube moments rules (`server/moments.json`).
+Streamers and their per-streamer settings (on/off, YouTube account, Twitch login, storage rule) are **not** in a config file: you manage them on the dashboard, which stores them in `server/channels.json`. The same goes for YouTube moments rules (`server/moments.json`) and the AI settings (`server/summary_settings.json`).
 
 ## Recorder: `server/config.php`
 
@@ -33,6 +33,9 @@ Copy `server/config.example.php`.
 | `MAX_RECORDING_HOURS` | `0` | Stop recording a stream after this many hours (the recording is finished as usual when the stream ends). `0` = no limit. |
 | `MOMENTS_QUOTE_CHAT` | `true` | YouTube moments from chat quote the message (links become "[link]"). `false` = only the writer's name. |
 | `LOG_MAX_MB` | `5` | A log larger than this becomes `recorder.log.1` (one old copy kept) and a new log starts. |
+| `GAP_REPAIR` | `true` | Fill holes in a Twitch recording (ad breaks you were shown, missed segments, a late start up to 10 minutes) from the stream's VOD before the MP4 conversion. Needs the streamer to keep VODs ([how-it-works.md](how-it-works.md#gap-repair)). |
+| `THUMBNAIL_FONT` | `''` | A bold `.ttf` font for the text on AI thumbnails. `''` = a common font of the server, or `thumbnail-font.ttf` next to `record.php`. |
+| `KICK_PUSHER_KEY` | built in | Only if Kick changes its public chat key. |
 | `SCAN_WAIT_HOURS` | `24` | How long a YouTube upload waits for a PC scan you're asked about or running, without progress ([pc-scan.md](pc-scan.md)). |
 | `DEBUG` | `false` | Log every run, including routine offline checks and handovers. |
 
@@ -53,6 +56,8 @@ Copy `dashboard/config.example.php` (next to `index.php`).
 | `FORCE_HTTPS` | `'auto'` | Redirect to HTTPS and send HSTS. `'auto'` = for real domain names, not for localhost, IP addresses or local names. `true`/`false` = always/never. |
 | `TIMEZONE` | `''` | Time zone for the dashboard. `''` = the recorder's (it reports it in `recordings/.settings.json`). |
 | `ICON_FILE` | `''` | Your own page icon (png/jpg/gif/webp/ico, max 300 KB), full path or relative to the dashboard folder. |
+| `UPDATE_CHECK` | `true` | Once a day, ask GitHub whether a newer version is out, and show a notice. Nothing about you is sent. |
+| `UPDATE_REPO` | `'LandonGam3r/stream-recorder'` | Where releases come from (change it if you run a fork). |
 
 ## Files you can drop in
 

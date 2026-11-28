@@ -67,7 +67,22 @@ The real charge is on your Console's usage page.
 
 ### Privacy
 
-The material above goes to Anthropic. Under Anthropic's [commercial terms](https://www.anthropic.com/legal/commercial-terms) for the API, Anthropic may not train models on it. The chat is public on Twitch anyway; the summary itself stays on your server.
+The material above goes to Anthropic. Under Anthropic's [commercial terms](https://www.anthropic.com/legal/commercial-terms) for the API, Anthropic may not train models on it. The chat is public on the streaming site anyway; the summary itself stays on your server.
+
+## More from the summary (Claude)
+
+These build on a Claude summary. Switch them on under *Also* on the AI summaries card.
+
+| | What | Cost |
+|---|---|---|
+| **YouTube chapters** | 3 or more chapters (at least a minute apart) at the top of the YouTube description. The upload waits for the summary, at most 2 hours; without one it goes ahead without chapters. | none extra |
+| **Thumbnail on YouTube** | Claude picks the most eye-catching picture and 2–4 words; the server puts the words on it in big letters and sets it on the video after the upload. YouTube only allows custom thumbnails on [verified channels](https://www.youtube.com/verify). Text needs PHP's GD with a font (Setup check shows it). | none extra |
+| **Clips** | 2 to 6 moments of 15–60 s are listed under the summary. *Cut clip* makes an MP4 in the recording's `clips/` folder without re-encoding; *Make Short* makes a vertical 1080×1920 version (re-encoded, a minute or two each). Either can go to a YouTube account, private like the streams. Cut on the server while nothing records. | none |
+| **Ask Claude** | Questions about one recording in its [text view](dashboard.md#the-text-view), answered from the summary, spoken words and chat. The answer arrives at the next cron run (a minute or two). | a fraction of a cent (Haiku) |
+| **Live check-ins** | Every 30 minutes while a streamer is live, a few sentences on what's going on, from the last half hour of chat, on their card and in the text view's Moments. Off by default. | about $0.001–0.01 each |
+| **Weekly digest** | Every Monday, last week's streams in one overview made from their summaries, on the AI card. | about a cent |
+
+Ask, check-ins and the digest use the normal (not batch) API, so they cost twice the batch prices below, still a fraction of a cent.
 
 ## Chrome's built-in AI (no API key)
 
@@ -88,9 +103,12 @@ In the recording folder:
 - `ai_summary.md`: the summary (Markdown).
 - `ai_summary.json`: state, model, cost and source.
 - `ai_frames/`: the pictures, only while a summary is being made.
+- `ai_extras.json`: chapters, clips and the thumbnail choice; `thumbnail.jpg`; `clips.json` and `clips/` with cut clips.
+- `ai_ask.json`: questions and answers; `checkins.json`: live check-ins.
 
 In the recorder folder:
 - `summary_settings.json`: the card's settings.
+- `recordings/.digests/`: the weekly digests.
 - `secret/anthropic.enc`: the encrypted key.
 - `secret/anthropic_status.json`: the key check.
 
